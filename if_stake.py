@@ -66,8 +66,9 @@ async def main(
     ata = get_associated_token_address(wallet.public_key, spot_mint)
     ch.spot_market_atas[spot_market_index] = ata
     balance = await connection.get_token_account_balance(ata)
-    print('current spot ata balance:', balance['result']['value']['uiAmount'])
-    print('ATA addr:', ata)
+    if balance.get('result') is not None:
+        print('current spot ata balance:', balance['result']['value']['uiAmount'])
+        print('ATA addr:', ata)
 
     if operation == 'add' or operation == 'remove' and spot_market_index == 1:
         ata = get_associated_token_address(ch.authority, spot_market.mint)
@@ -77,17 +78,19 @@ async def main(
             await ch.send_ixs(ix)
         ch.spot_market_atas[spot_market_index] = ata
 
-        # send to WSOL and sync 
-        # https://github.dev/solana-labs/solana-program-library/token/js/src/ix/types.ts
-        keys = [AccountMeta(pubkey=ch.spot_market_atas[spot_market_index], is_signer=False, is_writable=True)]
-        data = int.to_bytes(17, 1, 'little')
-        program_id = TOKEN_PROGRAM_ID
-        ix = TransactionInstruction(
-            keys=keys, 
-            program_id=program_id, 
-            data=data
-        )
-        await ch.send_ixs(ix)
+
+        if spot_market_index == 1:
+            # send to WSOL and sync 
+            # https://github.dev/solana-labs/solana-program-library/token/js/src/ix/types.ts
+            keys = [AccountMeta(pubkey=ch.spot_market_atas[spot_market_index], is_signer=False, is_writable=True)]
+            data = int.to_bytes(17, 1, 'little')
+            program_id = TOKEN_PROGRAM_ID
+            ix = TransactionInstruction(
+                keys=keys, 
+                program_id=program_id, 
+                data=data
+            )
+            await ch.send_ixs(ix)
 
     spot = await get_spot_market_account(ch.program, spot_market_index)
     total_shares = spot.insurance_fund.total_shares
@@ -105,7 +108,7 @@ async def main(
         if_addr = get_insurance_fund_stake_public_key(
             ch.program_id, kp.public_key, spot_market_index
         )
-        if not does_account_exist(connection, if_addr):
+        if not (await does_account_exist(connection, if_addr)):
             print('initializing stake account...')
             sig = await ch.initialize_insurance_fund_stake(spot_market_index)
             print(sig)
