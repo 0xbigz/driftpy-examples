@@ -212,13 +212,12 @@ if __name__ == '__main__':
     if args.keypath is None:
         raise NotImplementedError("need to provide keypath or set ANCHOR_WALLET")
 
-    match args.env:
-        case 'devnet':
-            url = 'https://api.devnet.solana.com'
-        case 'mainnet':
-            url = 'https://api.mainnet-beta.solana.com'
-        case _:
-            raise NotImplementedError('only devnet/mainnet env supported')
+    if args.env == 'devnet':
+        url = 'https://api.devnet.solana.com'
+    elif args.env == 'mainnet':
+        url = 'https://api.mainnet-beta.solana.com'
+    else:
+        raise NotImplementedError('only devnet/mainnet env supported')
 
     import asyncio
     asyncio.run(main(
