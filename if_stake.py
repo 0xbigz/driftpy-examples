@@ -71,7 +71,7 @@ async def main(
 
     if operation == 'add' or operation == 'remove' and spot_market_index == 1:
         ata = get_associated_token_address(ch.authority, spot_market.mint)
-        if not does_account_exist(connection, ata):
+        if not (await does_account_exist(connection, ata)):
             from spl.token.instructions import create_associated_token_account
             ix = create_associated_token_account(ch.authority, ch.authority, spot_market.mint)
             await ch.send_ixs(ix)
