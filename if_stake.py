@@ -95,7 +95,7 @@ async def main(
     spot = await get_spot_market_account(ch.program, spot_market_index)
     total_shares = spot.insurance_fund.total_shares
 
-    print(f'{operation}ing {if_amount}$ spot...')
+    print(f'"{operation}"-ing {if_amount}$ spot...')
     spot_percision = 10 ** spot.decimals
     if_amount = int(if_amount * spot_percision)
 
@@ -128,30 +128,31 @@ async def main(
             print('confirmation failed exiting...')
             return
 
-        if if_amount == None: 
-            vault_balance = (await connection.get_token_account_balance(
-                get_insurance_fund_vault_public_key(
-                    ch.program_id, spot_market_index
-                )
-            ))['result']['value']['uiAmount']
-            spot_market = await get_spot_market_account(ch.program, spot_market_index)
-            ifstake = await get_if_stake_account(
-                ch.program, 
-                ch.authority, 
-                spot_market_index
+        ifstake = None
+        # if if_amount == None: 
+        vault_balance = (await connection.get_token_account_balance(
+            get_insurance_fund_vault_public_key(
+                ch.program_id, spot_market_index
             )
-            total_amount = vault_balance * ifstake.if_shares / spot_market.insurance_fund.total_shares
-            print(f'claimable amount: {total_amount}$')
-            if_amount = int(total_amount * QUOTE_PRECISION)
+        ))['result']['value']['uiAmount']
+        spot_market = await get_spot_market_account(ch.program, spot_market_index)
+        ifstake = await get_if_stake_account(
+            ch.program, 
+            ch.authority, 
+            spot_market_index
+        )
+        total_amount = vault_balance * ifstake.if_shares / spot_market.insurance_fund.total_shares
+        print(f'would-be claimable amount: {total_amount}$')
+        if_amount = int(total_amount * QUOTE_PRECISION)
 
-        if ifstake.last_withdraw_requested_shares == 0:
+        if ifstake.last_withdraw_request_shares == 0:
             print('requesting to remove if stake...') 
             ix = await ch.request_remove_insurance_fund_stake(
                 spot_market_index, if_amount
             )
             await view_logs(ix, connection)
         
-        print('removing if stake of (up to)'+str(ifstake.last_withdraw_requested_value/1e6) +'...') 
+        print('removing if stake of (up to)'+str(ifstake.last_withdraw_request_value/1e6) +'...') 
         try:
             ix = await ch.remove_insurance_fund_stake(
                 spot_market_index
