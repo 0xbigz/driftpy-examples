@@ -9,6 +9,8 @@ from solana.rpc.async_api import AsyncClient
 from solana.keypair import Keypair
 from solana.rpc import commitment
 
+import time
+
 from driftpy.constants.config import configs
 from driftpy.clearing_house import ClearingHouse
 from driftpy.accounts import *
@@ -97,7 +99,7 @@ async def main(
 
     print(f'"{operation}"-ing {if_amount}$ spot...')
     spot_percision = 10 ** spot.decimals
-    if_amount = int(if_amount * spot_percision)
+    if_amount = int(if_amount * spot_percision) if if_amount is not None else None
 
     if operation == 'add':
         resp = input('confirm adding stake: Y?')
@@ -115,12 +117,12 @@ async def main(
 
         print('adding stake ....')
         sig = await ch.add_insurance_fund_stake(spot_market_index, if_amount)
-        print(sig)
+        print('txSig:', sig)
 
     elif operation == 'cancel':
         print('canceling...')
         sig = await ch.cancel_request_remove_insurance_fund_stake(spot_market_index)
-        print(sig)
+        print('txSig:', sig)
 
     elif operation == 'remove':
         resp = input('confirm removing stake: Y?')
@@ -150,18 +152,30 @@ async def main(
             ix = await ch.request_remove_insurance_fund_stake(
                 spot_market_index, if_amount
             )
+            print('txSig:', ix)
             await view_logs(ix, connection)
-        
-        print('removing if stake of (up to)'+str(ifstake.last_withdraw_request_value/1e6) +'...') 
-        try:
-            ix = await ch.remove_insurance_fund_stake(
-                spot_market_index
-            )
-            await view_logs(ix, connection)
-        except Exception as e: 
-            print('unable to unstake -- likely bc not enough time has passed since request')
-            print(e)
-            return
+
+        ifstake = await get_if_stake_account(
+            ch.program, 
+            ch.authority, 
+            spot_market_index
+        )
+
+        now_ts = time.time()
+
+        if spot_market.insurance_fund.unstaking_period > 0 and ifstake.last_withdraw_request_ts + spot_market.insurance_fund.unstaking_period > now_ts:
+            print("Request done, wait 13 days and then claim")
+        else:
+            print('removing if stake of (up to)'+str(ifstake.last_withdraw_request_value/1e6) +'...') 
+            try:
+                ix = await ch.remove_insurance_fund_stake(
+                    spot_market_index
+                )
+                await view_logs(ix, connection)
+            except Exception as e: 
+                print('unable to unstake -- likely bc not enough time has passed since request')
+                print(e)
+                return
 
     elif operation == 'view': 
         if_stake = await get_if_stake_account(ch.program, ch.authority, spot_market_index)
