@@ -144,13 +144,14 @@ async def main(
             print(f'claimable amount: {total_amount}$')
             if_amount = int(total_amount * QUOTE_PRECISION)
 
-        print('requesting to remove if stake...') 
-        ix = await ch.request_remove_insurance_fund_stake(
-            spot_market_index, if_amount
-        )
-        await view_logs(ix, connection)
+        if ifstake.last_withdraw_requested_shares == 0:
+            print('requesting to remove if stake...') 
+            ix = await ch.request_remove_insurance_fund_stake(
+                spot_market_index, if_amount
+            )
+            await view_logs(ix, connection)
         
-        print('removing if stake...') 
+        print('removing if stake of (up to)'+str(ifstake.last_withdraw_requested_value/1e6) +'...') 
         try:
             ix = await ch.remove_insurance_fund_stake(
                 spot_market_index
