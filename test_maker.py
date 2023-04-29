@@ -91,10 +91,12 @@ async def main(
     bid_order_params = copy.deepcopy(default_order_params)
     bid_order_params.direction = PositionDirection.LONG()
     bid_order_params.oracle_price_offset = int((offset - spread/2) * PRICE_PRECISION)
+    bid_order_params.price = 20 * PRICE_PRECISION
              
     ask_order_params = copy.deepcopy(default_order_params)
     ask_order_params.direction = PositionDirection.SHORT()
     ask_order_params.oracle_price_offset = int((offset + spread/2) * PRICE_PRECISION)
+    ask_order_params.price = 30 * PRICE_PRECISION
 
     order_print([bid_order_params, ask_order_params], market_name)
     print("bid_order_params = ", bid_order_params)
