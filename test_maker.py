@@ -12,6 +12,7 @@ from driftpy.types import *
 #MarketType, OrderType, OrderParams, PositionDirection, OrderTriggerCondition
 
 from driftpy.clearing_house import ClearingHouse
+from driftpy.clearing_house_user import ClearingHouseUser
 from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
 from borsh_construct.enum import _rust_enum
 
@@ -56,6 +57,18 @@ async def main(
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
     drift_acct = ClearingHouse.from_config(config, provider)
+    chu        = ClearingHouseUser(drift_acct)
+
+
+    ## calls to clearing house user
+    state = await chu.get_state()
+    print("state = ")
+    print(state)
+
+
+
+
+    ##
 
     is_perp  = 'PERP' in market_name.upper()
     market_type = MarketType.PERP() if is_perp else MarketType.SPOT()
@@ -91,12 +104,10 @@ async def main(
     bid_order_params = copy.deepcopy(default_order_params)
     bid_order_params.direction = PositionDirection.LONG()
     bid_order_params.oracle_price_offset = int((offset - spread/2) * PRICE_PRECISION)
-    bid_order_params.price = 20 * PRICE_PRECISION
              
     ask_order_params = copy.deepcopy(default_order_params)
     ask_order_params.direction = PositionDirection.SHORT()
     ask_order_params.oracle_price_offset = int((offset + spread/2) * PRICE_PRECISION)
-    ask_order_params.price = 30 * PRICE_PRECISION
 
     order_print([bid_order_params, ask_order_params], market_name)
     print("bid_order_params = ", bid_order_params)
@@ -118,11 +129,13 @@ async def main(
     remaining_accounts = await drift_acct.get_remaining_accounts(subaccount_id)
     print(remaining_accounts)
 
-    await drift_acct.send_ixs(
+    ret = await drift_acct.send_ixs(
         [
         await drift_acct.get_cancel_orders_ix(subaccount_id),
         ] + perp_orders_ix + spot_orders_ix
     )
+    print("ret bleow")
+    print(ret)
 
 if __name__ == '__main__':
     import argparse

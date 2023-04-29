@@ -9,10 +9,13 @@ from solana.rpc.async_api import AsyncClient
 
 from driftpy.constants.config import configs
 from driftpy.types import *
+from driftpy.math.market import calculate_bid_ask_price
 #MarketType, OrderType, OrderParams, PositionDirection, OrderTriggerCondition
 
 from driftpy.clearing_house import ClearingHouse
+from driftpy.clearing_house_user import ClearingHouseUser
 from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
+from driftpy.constants.markets import mainnet_markets
 from borsh_construct.enum import _rust_enum
 
 @_rust_enum
@@ -96,14 +99,24 @@ async def main(
     ask_order_params.direction = PositionDirection.SHORT()
     ask_order_params.oracle_price_offset = int((offset + spread/2) * PRICE_PRECISION)
 
+    ###### Get bid/ask ??? 
+    drift_acct 
+
+
+
+    ###
+
+    print("order_print is below")
     order_print([bid_order_params, ask_order_params], market_name)
-    print("bid_order_params = ", bid_order_params)
-    print("ask_order_params = ", ask_order_params)
 
     perp_orders_ix = []
     spot_orders_ix = []
+    print("About to place perp order")
+    print("bid_order_params = ", bid_order_params)
+    print("ask_order_params = ", ask_order_params)
+    print("subaccount_id=", subaccount_id)
+    print("*"*100)
     if is_perp:
-        print("placing perp order ix")
         perp_orders_ix = [
             await drift_acct.get_place_perp_order_ix(bid_order_params, subaccount_id),
             await drift_acct.get_place_perp_order_ix(ask_order_params, subaccount_id)
@@ -113,14 +126,14 @@ async def main(
             await drift_acct.get_place_spot_order_ix(bid_order_params, subaccount_id),
             await drift_acct.get_place_spot_order_ix(ask_order_params, subaccount_id)
         ]
-    remaining_accounts = await drift_acct.get_remaining_accounts(subaccount_id)
-    print(remaining_accounts)
+    print("abvout to send ixs")
 
     await drift_acct.send_ixs(
         [
         await drift_acct.get_cancel_orders_ix(subaccount_id),
         ] + perp_orders_ix + spot_orders_ix
     )
+    print(" sent ixs")
 
 if __name__ == '__main__':
     import argparse
