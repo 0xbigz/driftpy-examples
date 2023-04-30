@@ -1,16 +1,19 @@
 """
 Simple Market Maker using driftpy.
+Sameer Lal
 
 Setup:
-    + Include the following in ~/.config/solana/key.json: <redacted, in google docs> 
+    * Include the following in ~/.config/solana/key.json: <redacted, in google docs> 
         This account has already airdropped tokens on devnet and is registered w/drift with collateral
-    + Set: export ANCHOR_WALLET=’~/.config/solana/key.json”
-    + Run:  python3 simple_mm.py
+    * Set: export ANCHOR_WALLET=’~/.config/solana/key.json”
+    * Run:  python3 simple_mm.py
 
 
 Functionalities:
-    + Fetches list of outstanding limit orders, cleans it up into a simple orderbook
-    + Makes market incorporating buy/sell pressure from orderbook and current position
+    + Fetches list of outstanding limit orders, cleans it up into a simple orderbook (L2 view)
+    + Makes market incorporating buy/sell pressure from orderbook and current position, ability to add custom signals
+    + Able to cancel existing orders + submit bulk orders atomically
+    + Dumps statistics into data frame that can be post processed to see how market maker compares to top of the book 
 """
 
 import os, json, copy, requests
@@ -38,12 +41,12 @@ PKEY             = "7f6d3DWGkNrKTERtW9McbBQCVbZibuHUf7CsdUjJyK1t"
 
 ################################################
 ################################################
-# Market Making "hyperparameters"
+# Market Making parameters 
 TARGET_MAX_SIZE = 100
-LEVERAGE_LIMIT  = 2
+LEVERAGE_LIMIT  = 2     
 AGGRESSION      = 50e-4 # 50 bips
-SLEEP_INTERVAL  = 10 # In seconds
-NUM_EPOCHS      = 10
+SLEEP_INTERVAL  = 5     # In seconds
+NUM_EPOCHS      = 10    # (number of iterations of loop)
 ################################################
 ################################################
 
@@ -55,8 +58,9 @@ class PostOnlyParams:
 
 
 class OrderBook():
-    """
-    Features:
+    """ Processes devnet orderbook
+
+    Comments:
         - GET request to endpoint to get orderbook data  (most expensive step)
         - "Parse" by a market (e.g SOL-PERP) 
         - Create a friendly L2 view, by market
@@ -140,7 +144,7 @@ class OrderBook():
 
         return df_raw, bid_df, ask_df
 
-    def orderbook_expanded(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
+    def _orderbook_expanded(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
         """ Simplified View of Orderbook, by order
         """
         ## Fetch parsed dataframe
@@ -161,7 +165,7 @@ class OrderBook():
     def get_dlob(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
         """ L2 orderbook view (only price / quantities) split by bid/ask
         """
-        bid, ask = self.orderbook_expanded(perp_market, market_index)
+        bid, ask = self._orderbook_expanded(perp_market, market_index)
         
         bid_ob = bid[["price", "qty"]].groupby("price", sort=False).sum()
         ask_ob = ask[["price", "qty"]].groupby("price", sort=False).sum()
@@ -172,8 +176,7 @@ class OrderBook():
     
 
     def dlob_metrics(self, perp_market="SOL-PERP", oraclePrice=0):
-        """
-            Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
+        """ Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
         """
         # Look at weighted average of the top of the book .. can signal short term volatiltiy
         if(perp_market not in self.ob_l2_view):
