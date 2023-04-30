@@ -280,7 +280,7 @@ async def main(
     chu         = ClearingHouseUser(drift_acct, use_cache=True)
 
     # Delegate margin calculation / pnl / etc to clearing house 
-    async def get_stats(chu):
+    async def get_chu_stats(chu):
         perp_market = await chu.get_perp_market(0)
         return {
             "unrealized_pnl" : await chu.get_unrealized_pnl() / PRICE_PRECISION,
@@ -301,7 +301,7 @@ async def main(
         
         ## ---------- Pull stats  --------------
         await chu.set_cache()
-        stats = await get_stats(chu)
+        stats = await get_chu_stats(chu)
 
 
         print(f"> upnl = {stats['unrealized_pnl']}")
