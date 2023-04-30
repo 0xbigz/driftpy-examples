@@ -23,6 +23,7 @@ from borsh_construct.enum import _rust_enum
 
 import pandas as pd
 import numpy as np
+import asyncio
 
 pd.options.mode.chained_assignment = None
 
@@ -38,6 +39,8 @@ class PostOnlyParams:
     NONE = constructor()
     TRY_POST_ONLY = constructor()
     MUST_POST_ONLY = constructor()
+
+####### Orderbook Related ##########
 
 def orderbook_all(perp_market="SOL-PERP"):
     """ Queries DEVNET orderbok for specified perp market, organizes data into bid/asks sorted
@@ -153,6 +156,8 @@ def dlob_metrics(bid_ob, ask_ob, oraclePrice=None):
         }
     
 
+####### Placing Orders  ##########
+
 def mm_order_single(order_offset, order_direction, order_qty):
     
     return OrderParams(
@@ -175,16 +180,13 @@ def mm_order_single(order_offset, order_direction, order_qty):
         auction_end_price=None,
     )
 
-
-
-
-async def get_solana_perp_oracle(chu):
-    """ return SOL-PERP oracle """
-    perp_market = await chu.get_perp_market(0)
-    oracle = (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION
-
-    return oracle
-
+# For testing
+# async def get_solana_perp_oracle(chu):
+#     """ return SOL-PERP oracle """
+#     perp_market = await chu.get_perp_market(0)
+#     oracle = (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION
+# 
+#     return oracle
 
 async def construct_and_place(drift_acct, bid_offsets, bid_qtys, ask_offsets, ask_qtys, cancel_existing=True):
     """
@@ -211,11 +213,26 @@ async def construct_and_place(drift_acct, bid_offsets, bid_qtys, ask_offsets, as
     return ret
 
 async def main(
-    keypath, 
-    env, 
-    url, 
-    subaccount_id,
-):
+        keypath, 
+        env, 
+        url, 
+        subaccount_id,
+        file,
+    ):
+    """
+    Main event loop. 
+
+    Set hyperparmaeters, and then:
+    
+    LOOP:
+        (0) Pull Stats
+        (1) Get position
+        (2) Get orderbook Data
+        (3) Compute "fair price" based on orderbook
+        (4) Signals to shrink/expand spread
+        (5) Cancel existing orders + place new orders
+
+    """
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
     kp = Keypair.from_secret_key(bytes(secret))
     print('using public key:', kp.public_key, 'subaccount=', subaccount_id)
@@ -245,9 +262,9 @@ async def main(
     ##############
     ## Main event loop
     ##############
-
-    epoch = 0 # So it doesn't run infinitely 
-    while epoch < 10:
+    history = {}
+    epoch = 0 # So it doesn't run infinitely while testing 
+    while epoch < 5:
         
         print("Epoch: ", epoch)
         epoch += 1
@@ -255,7 +272,9 @@ async def main(
         ## ---------- Pull stats  --------------
         await chu.set_cache()
         stats = await get_stats(chu)
-        print(stats)
+        print(f"> upnl = {stats['unrealized_pnl']}")
+        print(f"> oracle = {stats['oracle_price']}")
+        print(f"leverage = {stats['curr_leverage']}")
         
         # (1) Current SOL-PERP position
         pp = stats['SOL_PERP_pos'] #await chu.get_user_position(0)
@@ -274,69 +293,109 @@ async def main(
         #### Signals --- very simple ----
         
         ## check if overleveraged -- here we need to reduce position immediately
-        over_leveraged = True if stats['curr_leverage'] > 0.8 * LEVERAGE_LIMIT else False
+        SIGNAL_over_leveraged = True if stats['curr_leverage'] > 0.8 * LEVERAGE_LIMIT else False
         
         ## Backoff position if needed
-        engage_sell_pressure  = True if current_pos > TARGET_MAX_SIZE  * 0.8 else False # Hyperparemeter 
-        engage_buy_pressure   = True if current_pos < -TARGET_MAX_SIZE * 0.8 else False # Hyperparemeter 
+        SIGNAL_engage_sell_pressure  = True if current_pos > TARGET_MAX_SIZE  * 0.8 else False # Hyperparemeter 
+        SIGNAL_engage_buy_pressure   = True if current_pos < -TARGET_MAX_SIZE * 0.8 else False # Hyperparemeter 
         
         ## no bid / no ask
-        no_bid = True if over_leveraged and engage_sell_pressure else False
-        no_ask = True if over_leveraged and engage_buy_pressure else False
+        SIGNAL_no_bid = True if SIGNAL_over_leveraged and SIGNAL_engage_sell_pressure else False
+        SIGNAL_no_ask = True if SIGNAL_over_leveraged and SIGNAL_engage_buy_pressure else False
         
             
         ## Adjustment on buy / sell spread due to buying and selling pressure in orderbook
+        SIGNAL_order_book_adj = False
         if(metrics['bid_avg'] <= stats['oracle_price'] <= metrics['ask_avg']):
-            
+            SIGNAL_order_book_adj = True
             ask_to_bid_factor = (metrics['ask_avg'] - stats['oracle_price']) / (stats['oracle_price'] - metrics['bid_avg'])
             if(ask_to_bid_factor > 1):
                 ask_adj_factor = 1 + np.ln(ask_to_bid_factor)
+                bid_adj_factor = 1
             elif(ask_to_bid_factor < 1):
                 bid_adj_factor = 1 + np.ln(ask_to_bid_factor)
+                ask_adj_factor = 1
         
-        # ------ bid side -------
+        # ---------------- BID SIDE -----------------
         ## Compute total size
         bid_target_pos     = max(0, TARGET_MAX_SIZE - current_pos)
         bid_offset_width   = AGGRESSION 
-        if(engage_buy_pressure):
+        
+        ## Apply signals to stretch, etc
+        if(SIGNAL_order_book_adj):
+            bid_offset_width *= bid_adj_factor
+        
+        if(SIGNAL_engage_buy_pressure):
             bid_offset_width *= 0.5 #Hyperparemeter
+
+        # Compute bid offsets (w.r.t oracle)  
+        if(not SIGNAL_no_bid):
+            bid_offsets= np.linspace(0, bid_offset_width, 4)[1:]      # e.g. 0.05, 0.1, 0.15
+            bid_qts    = bid_target_pos * np.array([0.25, 0.5, 0.25]) # "parabolic" weighting for now
             
-        bid_offsets        = np.linspace(0, bid_offset_width, 4)[1:]
-        bid_qts            = bid_target_pos * np.array([0.25, 0.5, 0.25])
+            print(f"> bid_target_pos = {bid_target_pos}")
+            print(f"> bid_offsets = {bid_offsets}")
+            print(f"> bid_qts = {bid_qts}")
+        else:
+            print("No bid, due to overleveraged position")
         
-        print(f"> bid_target_pos = {bid_target_pos}")
-        print(f"> bid_offsets = {bid_offsets}")
-        print(f"> bid_qts = {bid_qts}")
-        
-        # ------ ask side -------
+        # ---------------- ASK SIDE -----------------
         ask_target_pos   = max(0, TARGET_MAX_SIZE + current_pos)
-        ask_offset_width = AGGRESSION
-        if(engage_sell_pressure):
+        ask_offset_width = AGGRESSION * 1.01 # Bias due to funding payments
+        
+        ## Apply signals to stretch, etc
+        if(SIGNAL_order_book_adj):
+            ask_offset_width *= ask_adj_factor
+
+        if(SIGNAL_engage_sell_pressure):
             ask_offset_width *= 0.5
         
-        ask_offsets      = np.linspace(0, ask_offset_width, 4)[1:]
-        ask_qts          = ask_target_pos * np.array([0.25, 0.5, 0.25])
-        print(f"> ask_target_pos = {ask_target_pos}")
-        print(f"> ask_prices = {ask_offsets}")
-        print(f"> ask_qts = {ask_qts}")
+        if(not SIGNAL_no_ask):
+            ask_offsets      = np.linspace(0, ask_offset_width, 4)[1:]
+            ask_qts          = ask_target_pos * np.array([0.25, 0.5, 0.25])
+
+            print(f"> ask_target_pos = {ask_target_pos}")
+            print(f"> ask_prices = {ask_offsets}")
+            print(f"> ask_qts = {ask_qts}")
+        else:
+            print("No ask, due to overleveraged position")
         
         ## ---------- Send order  --------------
         ret = await construct_and_place(drift_acct, bid_offsets, bid_qts, ask_offsets, ask_qts)
         print(ret)
+
+        history[epoch] = {
+            "oraclePrice" : stats['oracle_price'],
+            "currLeverage": stats["curr_leverage"],
+            "ob_mid"         : metrics['mid'],
+            "ob_bid"         : metrics['bid'],
+            "ob_ask"         : metrics['ask'],
+            "bid_offsets"    : bid_offsets,
+            "bid_qts"        : bid_qts,
+            "ask_offsets"    : ask_offsets,
+            "ask_qts"        : ask_qts,
+            "txn"            : ret,
+        }
         
         ## ---------- Logging --------------    
         # Step 6: Wait for 1 second before repeating the loop
         await asyncio.sleep(SLEEP_INTERVAL)
+
+    ## Save data for analysis / tuning parmaeters
+    history_df = pd.DataFrame.from_dict(history)
+    history_df.to_pickle(file)
+
+    return history
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--keypath', type=str, required=False, default=os.environ.get('ANCHOR_WALLET'))
     parser.add_argument('--env', type=str, default='devnet')
+    parser.add_argument('--file', type=str, default="history.h5")
     parser.add_argument('--subaccount', type=int, required=False, default=0)
 
     args = parser.parse_args()
-
 
     if args.keypath is None:
         if os.environ['ANCHOR_WALLET'] is None:
@@ -351,12 +410,12 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError('only devnet/mainnet env supported')
 
-    import asyncio
     asyncio.run(main(
         args.keypath, 
         args.env, 
         url,
         args.subaccount,
+        args.file,
     ))
 
 
