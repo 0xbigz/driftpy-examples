@@ -14,10 +14,10 @@ Setup:
 
 
 Functionalities:
-    + Fetches list of outstanding limit orders, cleans it up into a simple orderbook (L2 view)
+    + Fetches list of outstanding limit orders, processes fixed/floating orders, cleans into a simple orderbook (L2 view)
     + Makes market incorporating buy/sell pressure from orderbook and current position, ability to add custom signals
-    + Able to cancel existing orders + submit bulk orders atomically
-    + Dumps statistics into data frame that can be post processed to see how market maker compares to top of the book 
+    + Able to cancel existing orders + submit bulk orders  
+    + Dumps statistics into data frame to compare mm bid against top of the book 
 """
 
 import os, json, copy, requests
@@ -40,7 +40,8 @@ from borsh_construct.enum import _rust_enum
 URL_DEVNET_OB    = "https://master.dlob.drift.trade/orders/json"
 MARKET_INDEX_SOL = 0
 userAccount      = "ECbtn9Y34m6L89EBDMRYxhpyrFgSHEcbELgozpqAvcDY"
-# Use the following: https://beta.drift.trade/overview/history/tradeHistory?userAccount=7f6d3DWGkNrKTERtW9McbBQCVbZibuHUf7CsdUjJyK1t 
+# UI is blocked unless it contains userAccount
+#  Use the following: https://beta.drift.trade/overview/history/tradeHistory?userAccount=7f6d3DWGkNrKTERtW9McbBQCVbZibuHUf7CsdUjJyK1t 
 PKEY             = "7f6d3DWGkNrKTERtW9McbBQCVbZibuHUf7CsdUjJyK1t" 
 
 ################################################
@@ -211,7 +212,7 @@ def mm_order_single(order_offset, order_direction, order_qty):
         price=0,
         market_index=0,
         reduce_only=False,
-        post_only=PostOnlyParams.TRY_POST_ONLY(),
+        post_only=PostOnlyParams.TRY_POST_ONLY(), # Don't wnat to trade against AMM
         immediate_or_cancel=False,
         trigger_price=0,
         trigger_condition=OrderTriggerCondition.ABOVE(),
@@ -263,12 +264,13 @@ async def main(
     Set hyperparmaeters, and then:
     
     LOOP:
-        (0) Pull Stats
-        (1) Get position
-        (2) Get orderbook Data
-        (3) Compute metrics on orderobok Data
-        (4) Signals to shrink/expand spread
-        (5) Cancel existing orders + place new orders
+        (1) Pull Stats from ClearingHouseUser
+        (2) Get orderbook data + clean up orderbook 
+        (3) Construct signals using orderbook data / current position
+        (4) Use signals and position to compute bid / ask spread + desired position
+        (5) Cancel existing orders and place new orders
+        (6) Log results for later analysis
+        Sleep ... 
 
     """
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
@@ -303,10 +305,9 @@ async def main(
         print("*" * 10, "Epoch: ", epoch, "*" * 10)
         epoch += 1
         
-        ## ---------- Pull stats  --------------
+        ## ---------- (1) Pull stats from clearing house --------------
         await chu.set_cache()
         stats = await get_chu_stats(chu)
-
 
         print(f"> upnl = {stats['unrealized_pnl']}")
         print(f"> oracle = {stats['oracle_price']}")
@@ -316,15 +317,16 @@ async def main(
         current_pos = pp.base_asset_amount / 1e9  
         print(f"> current pos = {current_pos}")
         
-        ## ---------- Get Orderbook Data  --------------
+        ## ---------- (2) Get Orderbook Data + Metrics  --------------
         curr_ob = OrderBook()
 
         # Get L2 View + Compute metrics
         bid_ob, ask_ob = curr_ob.get_dlob()
         metrics = curr_ob.dlob_metrics("SOL-PERP", stats['oracle_price'])
+
         print(f"> dlob metrics = {metrics}")
         
-        ## ---------- Construct signals  --------------
+        ## ---------- (3) Construct signals  --------------
 
         ## check if approaching overleveraged -- here we need to reduce position IMMEDIATELY
         SIGNAL_over_leveraged = True if stats['curr_leverage'] > 0.9 * LEVERAGE_LIMIT else False
@@ -348,8 +350,9 @@ async def main(
             elif(ask_to_bid_factor < 1):
                 bid_adj_factor = 1 + np.ln(1/ask_to_bid_factor)
                 ask_adj_factor = 1
-        
-        # ---------------- BID SIDE -----------------
+
+        ## ---------- (4) Incorporate signals into bid/ask spread -------------
+        # --- bid side  --- 
         ## Compute total size
         bid_target_pos     = max(0, TARGET_MAX_SIZE - current_pos)
         bid_offset_width   = AGGRESSION 
@@ -372,11 +375,12 @@ async def main(
         else:
             print("\nNo bid, due to overleveraged position")
         
-        # ---------------- ASK SIDE -----------------
+        # --- ask side  --- 
+        ## Compute total size
         ask_target_pos   = max(0, TARGET_MAX_SIZE + current_pos)
         ask_offset_width = AGGRESSION * 1.01 # Bias due to funding payments
         
-        ## Apply signals to stretch, etc
+        ## Apply signals to stretch, etc interval
         if(SIGNAL_order_book_adj):
             ask_offset_width *= ask_adj_factor
 
@@ -393,10 +397,11 @@ async def main(
         else:
             print("\nNo ask, due to overleveraged position")
         
-        ## ---------- Cancel existing orders + Send new orders  --------------
+        ## ---------- (5) Cancel existing orders + Send new orders  --------------
         ret = await construct_and_place(drift_acct, bid_offsets, bid_qts, ask_offsets, ask_qts)
         print("Order confirmation: ", ret)
 
+        ## ---------- (5) Logging --------------    
         history[epoch] = {
             "time"        : dt.datetime.now(),
             "oraclePrice" : stats['oracle_price'],
@@ -413,12 +418,10 @@ async def main(
             "txn"               : ret,
         }
 
-        ## Save data for analysis / tuning parmaeters
         history_df = pd.DataFrame.from_dict(history)
         history_df.to_pickle(file)
         
-        ## ---------- Logging --------------    
-        # Step 6: Wait before repeating the loop
+        ## (Avoid rate limiting) 
         await asyncio.sleep(SLEEP_INTERVAL)
 
     return history_df
@@ -441,7 +444,7 @@ if __name__ == '__main__':
     if args.env == 'devnet':
         url = 'https://api.devnet.solana.com'
     else:
-        raise NotImplementedError('only devnet env supported at this time')
+        raise NotImplementedError('Only devnet env supported at this time')
 
     asyncio.run(main(
         args.keypath, 
