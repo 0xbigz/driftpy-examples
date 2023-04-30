@@ -1,6 +1,13 @@
 """
 Simple Market Maker using driftpy.
 
+Setup:
+    + Include the following in ~/.config/solana/key.json: <redacted, in google docs> 
+        This account has already airdropped tokens on devnet and is registered w/drift with collateral
+    + Set: export ANCHOR_WALLET=’~/.config/solana/key.json”
+    + Run:  python3 simple_mm.py
+
+
 Functionalities:
     + Fetches list of outstanding limit orders, cleans it up into a simple orderbook
     + Makes market incorporating buy/sell pressure from orderbook and current position
@@ -164,7 +171,7 @@ class OrderBook():
         return bid_ob, ask_ob
     
 
-    def dlob_metrics(self, perp_market="SOL-PERP", oraclePrice=None):
+    def dlob_metrics(self, perp_market="SOL-PERP", oraclePrice=0):
         """
             Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
         """
@@ -177,21 +184,12 @@ class OrderBook():
         tob = bid_ob.iloc[:3].reset_index()
         toa = ask_ob.iloc[:3].reset_index()
 
-        if(oraclePrice is None):
-            return {"mid"        : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0,
-                    "bid"        :  bid_ob.index.max(),
-                    "ask"        :  ask_ob.index.min(),
-                    "bid_avg"    : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum(),
-                    "ask_avg"    : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum()
-
-            }
-        else:
-            return {"mid"       : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0 - oraclePrice,
-                    "bid"       :  bid_ob.index.max() - oraclePrice,
-                    "ask"       :  ask_ob.index.min() - oraclePrice,
-                    "bid_avg"   : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum() - oraclePrice,
-                    "ask_avg"   : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum() - oraclePrice,
-            }
+        return {"mid"       : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0 - oraclePrice,
+                "bid"       :  bid_ob.index.max() - oraclePrice,
+                "ask"       :  ask_ob.index.min() - oraclePrice,
+                "bid_avg"   : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum() - oraclePrice,
+                "ask_avg"   : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum() - oraclePrice,
+        }
     
 
 #### Order Wrappers
@@ -261,7 +259,7 @@ async def main(
         (0) Pull Stats
         (1) Get position
         (2) Get orderbook Data
-        (3) Compute "fair price" based on orderbook
+        (3) Compute metrics on orderobok Data
         (4) Signals to shrink/expand spread
         (5) Cancel existing orders + place new orders
 
@@ -302,7 +300,6 @@ async def main(
         await chu.set_cache()
         stats = await get_stats(chu)
 
-        curr_ob = OrderBook()
 
         print(f"> upnl = {stats['unrealized_pnl']}")
         print(f"> oracle = {stats['oracle_price']}")
@@ -312,12 +309,15 @@ async def main(
         current_pos = pp.base_asset_amount / 1e9  
         print(f"> current pos = {current_pos}")
         
-        # Get L2 view of orderbook + compute metrics
+        ## ---------- Get Orderbook Data  --------------
+        curr_ob = OrderBook()
+
+        # Get L2 View + Compute metrics
         bid_ob, ask_ob = curr_ob.get_dlob()
         metrics = curr_ob.dlob_metrics("SOL-PERP", stats['oracle_price'])
         print(f"> dlob metrics = {metrics}")
         
-        ## ---------- Add in signals  --------------
+        ## ---------- Construct signals  --------------
 
         ## check if approaching overleveraged -- here we need to reduce position IMMEDIATELY
         SIGNAL_over_leveraged = True if stats['curr_leverage'] > 0.9 * LEVERAGE_LIMIT else False
@@ -386,7 +386,7 @@ async def main(
         else:
             print("\nNo ask, due to overleveraged position")
         
-        ## ---------- Send order  --------------
+        ## ---------- Cancel existing orders + Send new orders  --------------
         ret = await construct_and_place(drift_acct, bid_offsets, bid_qts, ask_offsets, ask_qts)
         print("Order confirmation: ", ret)
 
