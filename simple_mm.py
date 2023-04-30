@@ -46,120 +46,155 @@ class PostOnlyParams:
     TRY_POST_ONLY = constructor()
     MUST_POST_ONLY = constructor()
 
-####### Orderbook Related ##########
-def orderbook_all(perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
-    """ Queries DEVNET orderbook for specified perp market, organizes data into bid/asks sorted
 
+class OrderBook():
     """
-    try:
-        r = requests.get(URL_DEVNET_OB).json()
-    except:
-        print(r)
-        raise Exception("Unable to fetch orderbook")
-
-    slot    = r['slot']
-    oracles = r['oracles']
-    orders  = r['orders']
-
-    ## market index -> price
-    market_to_oracle_map = pd.DataFrame(r['oracles']).set_index('marketIndex').to_dict()['price']
-
-    ## Get list of outstanding orders    
-    orders_all = list(map(lambda d: {"user":d['user'], **d.pop('order')}, orders))
-    df         = pd.DataFrame(orders_all)
-    df_raw     = pd.DataFrame(orders_all)
+    Features:
+        - GET request to endpoint to get orderbook data  (most expensive step)
+        - "Parse" by a market (e.g SOL-PERP) 
+        - Create a friendly L2 view, by market
+        - Metrics to evaluate orderbook 
+        - Cache results for quick access
     
-    ## Orderbook contains many orders, we are only interested in ___-PERP markets
-    df = df[(df.marketIndex == market_index) & (df.marketType=='perp')]
+    """
+    def __init__(self, url_ob=URL_DEVNET_OB):
+        print(f"Fetching orderbook from {URL_DEVNET_OB}")
+        try:
+            r = requests.get(URL_DEVNET_OB).json()
+        except:
+            raise Exception("Unable to fetch orderbook")
+        self.ob_data      = r
+        self.ob_parsed    = {} 
+        self.ob_l2_view   = {} 
     
-    df["oraclePrice"] = df["marketIndex"].apply(lambda x: market_to_oracle_map.get(x, None))
+    def refresh(self):
+        try:
+            r = requests.get(URL_DEVNET_OB).json()
+        except:
+            raise Exception("Unable to fetch orderbook")
+        self.ob_data = r
 
-    ## Convert from lamports / various precisions:
-    for col in ['price', 'oraclePrice', 'oraclePriceOffset']:
-        df[col] = df[col].astype(int)
-        df[col] /= PRICE_PRECISION 
 
-    for col in ['quoteAssetAmountFilled']:
-        df[col] = df[col].astype(int)
-        df[col] /= PRICE_PRECISION # Taken from example script, need to verify downstream
+    def parse_orderbook(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
+        """ Parses orderbook data looking for specified market and places into a dataframe 
+        """
+        slot    = self.ob_data['slot']
+        oracles = self.ob_data['oracles']
+        orders  = self.ob_data['orders']
 
-    for col in ['baseAssetAmount', 'baseAssetAmountFilled']:
-        df[col] = df[col].astype(int)
-        df[col] /= BASE_PRECISION 
+        market_to_oracle_map = pd.DataFrame(self.ob_data['oracles']).set_index('marketIndex').to_dict()['price']
+
+        ## Get list of outstanding orders    
+        orders_all = list(map(lambda d: {"user":d['user'], **d.pop('order')}, orders))
+        df         = pd.DataFrame(orders_all)
+
+        # Below is returned for strictly testing  / debugging purposes
+        df_raw     = pd.DataFrame(orders_all)
+    
+        ## Orderbook contains many orders, we are only interested in ___-PERP markets
+        df = df[(df.marketIndex == market_index) & (df.marketType=='perp')]
         
-    ## Split up bids/asks and filter for only limit orders 
-    bid_df = df[(df.direction == 'long')  & (df.orderType == 'limit')]
-    ask_df = df[(df.direction == 'short') & (df.orderType == 'limit')]
+        df["oraclePrice"] = df["marketIndex"].apply(lambda x: market_to_oracle_map.get(x, None))
+
+        ## Convert from lamports / various precisions:
+        for col in ['price', 'oraclePrice', 'oraclePriceOffset']:
+            df[col] = df[col].astype(int)
+            df[col] /= PRICE_PRECISION 
+
+        for col in ['quoteAssetAmountFilled']:
+            df[col] = df[col].astype(int)
+            df[col] /= PRICE_PRECISION # Taken from example script, need to verify downstream
+
+        for col in ['baseAssetAmount', 'baseAssetAmountFilled']:
+            df[col] = df[col].astype(int)
+            df[col] /= BASE_PRECISION 
+        
+        ## Split up bids/asks and filter for only limit orders 
+        bid_df = df[(df.direction == 'long')  & (df.orderType == 'limit')]
+        ask_df = df[(df.direction == 'short') & (df.orderType == 'limit')]
+        
+        ## Fixed prices are ok price wise.
+        ## Floating prices need to be marked to a fixed price according to oracle price    
+        bid_float = bid_df.loc[bid_df.price == 0] # inv: 0 price <-> floating order .w.r.t oracle 
+        ask_float = ask_df.loc[ask_df.price == 0] #
+        
+        bid_df.loc[bid_df.price == 0, "price"] = bid_float["oraclePrice"] + bid_float["oraclePriceOffset"]
+        ask_df.loc[ask_df.price == 0, "price"] = ask_float["oraclePrice"] + ask_float["oraclePriceOffset"]
+        
+        
+        bid_df = bid_df.sort_values(['price'], ascending=False)
+        ask_df = ask_df.sort_values(['price'])
+        
+        bid_df = bid_df.reset_index(drop=True)
+        ask_df = ask_df.reset_index(drop=True)
+
+        # Store parsed data for that specified market
+        self.ob_parsed[perp_market] = (bid_df, ask_df)
+
+        return df_raw, bid_df, ask_df
+
+    def orderbook_expanded(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
+        """ Simplified View of Orderbook, by order
+        """
+        ## Fetch parsed dataframe
+        if(perp_market in self.ob_parsed):
+            _, bid, ask = self.ob_parsed[perp_market] 
+        else:
+            _, bid, ask = self.parse_orderbook(perp_market, market_index)
+        
+        bid_simple = bid[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
+        ask_simple = ask[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
+
+        ## Display unfilled order amounts
+        bid_simple["qty"] = bid_simple["baseAssetAmount"] - bid_simple["baseAssetAmountFilled"]
+        ask_simple["qty"] = ask_simple["baseAssetAmount"] - ask_simple["baseAssetAmountFilled"]
+
+        return bid_simple, ask_simple
+
+    def get_dlob(self, perp_market="SOL-PERP", market_index=MARKET_INDEX_SOL):
+        """ L2 orderbook view (only price / quantities) split by bid/ask
+        """
+        bid, ask = self.orderbook_expanded(perp_market, market_index)
+        
+        bid_ob = bid[["price", "qty"]].groupby("price", sort=False).sum()
+        ask_ob = ask[["price", "qty"]].groupby("price", sort=False).sum()
+
+        self.ob_l2_view[perp_market] = (bid_ob, ask_ob)
+
+        return bid_ob, ask_ob
     
-    ## Fixed prices are ok price wise.
-    ## Floating prices need to be marked to a fixed price according to oracle price    
-    bid_float = bid_df.loc[bid_df.price == 0] # inv: 0 price <-> floating order .w.r.t oracle 
-    ask_float = ask_df.loc[ask_df.price == 0] #
-    
-    bid_df.loc[bid_df.price == 0, "price"] = bid_float["oraclePrice"] + bid_float["oraclePriceOffset"]
-    ask_df.loc[ask_df.price == 0, "price"] = ask_float["oraclePrice"] + ask_float["oraclePriceOffset"]
-    
-    
-    bid_df = bid_df.sort_values(['price'], ascending=False)
-    ask_df = ask_df.sort_values(['price'])
-    
-    bid_df = bid_df.reset_index(drop=True)
-    ask_df = ask_df.reset_index(drop=True)
 
-    return df_raw, bid_df, ask_df
+    def dlob_metrics(self, perp_market="SOL-PERP", oraclePrice=None):
+        """
+            Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
+        """
+        # Look at weighted average of the top of the book .. can signal short term volatiltiy
+        if(perp_market not in self.ob_l2_view):
+            raise Exception("L2 Orderbook View not populated")
 
+        bid_ob, ask_ob = self.ob_l2_view[perp_market]
 
-def orderbook_expanded(perp_market="SOL-PERP"):
-    """ Simplified View of Orderbook, by order
-    """
-    _, bid, ask = orderbook_all(perp_market)
-    
-    bid_simple = bid[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
-    ask_simple = ask[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
+        tob = bid_ob.iloc[:3].reset_index()
+        toa = ask_ob.iloc[:3].reset_index()
 
-    ## Display unfilled order amounts
-    bid_simple["qty"] = bid_simple["baseAssetAmount"] - bid_simple["baseAssetAmountFilled"]
-    ask_simple["qty"] = ask_simple["baseAssetAmount"] - ask_simple["baseAssetAmountFilled"]
+        if(oraclePrice is None):
+            return {"mid"        : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0,
+                    "bid"        :  bid_ob.index.max(),
+                    "ask"        :  ask_ob.index.min(),
+                    "bid_avg"    : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum(),
+                    "ask_avg"    : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum()
 
-    return bid_simple, ask_simple
-
-def get_dlob(perp_market="SOL-PERP"):
-    """ L2 orderbook view (only price / quantities) split by bid/ask
-    """
-    bid, ask = orderbook_expanded(perp_market)
-    
-    bid_ob = bid[["price", "qty"]].groupby("price", sort=False).sum()
-    ask_ob = ask[["price", "qty"]].groupby("price", sort=False).sum()
-    return bid_ob, ask_ob
+            }
+        else:
+            return {"mid"       : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0 - oraclePrice,
+                    "bid"       :  bid_ob.index.max() - oraclePrice,
+                    "ask"       :  ask_ob.index.min() - oraclePrice,
+                    "bid_avg"   : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum() - oraclePrice,
+                    "ask_avg"   : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum() - oraclePrice,
+            }
     
 
-def dlob_metrics(bid_ob, ask_ob, oraclePrice=None):
-    """
-        Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
-    """
-    # Look at weighted average of the top of the book .. can signal short term volatiltiy
-    tob = bid_ob.iloc[:3].reset_index()
-    toa = ask_ob.iloc[:3].reset_index()
-
-    if(oraclePrice is None):
-        return {"mid"        : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0,
-                "bid"        :  bid_ob.index.max(),
-                "ask"        :  ask_ob.index.min(),
-                "bid_avg"    : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum(),
-                "ask_avg"    : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum()
-
-        }
-    else:
-        return {"mid"       : (bid_ob.index.max() + ask_ob.index.min() ) / 2.0 - oraclePrice,
-                "bid"       :  bid_ob.index.max() - oraclePrice,
-                "ask"       :  ask_ob.index.min() - oraclePrice,
-                "bid_avg"   : (tob["price"] * tob["qty"]).sum() / tob["qty"].sum() - oraclePrice,
-                "ask_avg"   : (toa["price"] * toa["qty"]).sum() / toa["qty"].sum() - oraclePrice,
-        }
-    
-
-####### WRAPPERS FOR PLACING ORDERS  ##########
-
+#### Order Wrappers
 def mm_order_single(order_offset, order_direction, order_qty):
     
     return OrderParams(
@@ -182,20 +217,15 @@ def mm_order_single(order_offset, order_direction, order_qty):
         auction_end_price=None,
     )
 
-# For testing
-# async def get_solana_perp_oracle(chu):
-#     """ return SOL-PERP oracle """
-#     perp_market = await chu.get_perp_market(0)
-#     oracle = (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION
-# 
-#     return oracle
-
 async def construct_and_place(drift_acct, bid_offsets, bid_qtys, ask_offsets, ask_qtys, cancel_existing=True):
     """
         Bundles offsets / quantities for bids / asks into an array of orders
         and places order
         
         cancels existing orders before placing --> can turn this off
+
+        Only places orders with >0 quantity 
+        Only 0th subaccount (For simplcity of bookkeeping)
     """
     all_orders = []
     if(cancel_existing):
@@ -220,7 +250,6 @@ async def main(
         keypath, 
         env, 
         url, 
-        subaccount_id,
         file,
     ):
     """
@@ -239,7 +268,7 @@ async def main(
     """
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
     kp = Keypair.from_secret_key(bytes(secret))
-    print('Using public key:', kp.public_key, ' and subaccount=', subaccount_id)
+    print('Using public key:', kp.public_key)
 
     ## Set up clients to interact with drift
     config      = configs[env]
@@ -247,16 +276,15 @@ async def main(
     connection  = AsyncClient(url)
     provider    = Provider(connection, wallet)
     drift_acct  = ClearingHouse.from_config(config, provider)
-    chu        = ClearingHouseUser(drift_acct, use_cache=True)
+    chu         = ClearingHouseUser(drift_acct, use_cache=True)
 
     # Delegate margin calculation / pnl / etc to clearing house 
-
     async def get_stats(chu):
         perp_market = await chu.get_perp_market(0)
         return {
             "unrealized_pnl" : await chu.get_unrealized_pnl() / PRICE_PRECISION,
             "oracle_price"   : (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION,
-            "curr_leverage"  : ( await chu.get_leverage() ) / 10_000,  # h/t bigz,
+            "curr_leverage"  : ( await chu.get_leverage() ) / 10_000,  # h/t bigz
             "SOL_PERP_pos"   : (await chu.get_user_position(0))
         }
     
@@ -267,12 +295,14 @@ async def main(
     epoch = 0 
     while epoch < NUM_EPOCHS: 
         
-        print("Epoch: ", epoch)
+        print("*" * 10, "Epoch: ", epoch, "*" * 10)
         epoch += 1
         
         ## ---------- Pull stats  --------------
         await chu.set_cache()
         stats = await get_stats(chu)
+
+        curr_ob = OrderBook()
 
         print(f"> upnl = {stats['unrealized_pnl']}")
         print(f"> oracle = {stats['oracle_price']}")
@@ -282,19 +312,17 @@ async def main(
         current_pos = pp.base_asset_amount / 1e9  
         print(f"> current pos = {current_pos}")
         
-        # (2): Get L2 view of orderbook
-        bid_ob, ask_ob = get_dlob()
-
-        # (3): Compute orderboo metrics 
-        metrics = dlob_metrics(bid_ob, ask_ob, stats['oracle_price'])
+        # Get L2 view of orderbook + compute metrics
+        bid_ob, ask_ob = curr_ob.get_dlob()
+        metrics = curr_ob.dlob_metrics("SOL-PERP", stats['oracle_price'])
         print(f"> dlob metrics = {metrics}")
         
         ## ---------- Add in signals  --------------
-        
+
         ## check if approaching overleveraged -- here we need to reduce position IMMEDIATELY
         SIGNAL_over_leveraged = True if stats['curr_leverage'] > 0.9 * LEVERAGE_LIMIT else False
         
-        ## check if approaching max size 
+        ## check if approaching max size  ... start to back off
         SIGNAL_engage_sell_pressure  = True if current_pos > TARGET_MAX_SIZE  * 0.8 else False # Hyperparemeter 
         SIGNAL_engage_buy_pressure   = True if current_pos < -TARGET_MAX_SIZE * 0.8 else False # Hyperparemeter 
         
@@ -319,7 +347,7 @@ async def main(
         bid_target_pos     = max(0, TARGET_MAX_SIZE - current_pos)
         bid_offset_width   = AGGRESSION 
         
-        ## Apply signals to stretch, etc .. ideally should do it all at once
+        ## Apply each signal -- shrink or expand the quoting width
         if(SIGNAL_order_book_adj):
             bid_offset_width *= bid_adj_factor
         
@@ -360,7 +388,7 @@ async def main(
         
         ## ---------- Send order  --------------
         ret = await construct_and_place(drift_acct, bid_offsets, bid_qts, ask_offsets, ask_qts)
-        print(ret)
+        print("Order confirmation: ", ret)
 
         history[epoch] = {
             "time"        : dt.datetime.now(),
@@ -394,7 +422,6 @@ if __name__ == '__main__':
     parser.add_argument('--keypath', type=str, required=False, default=os.environ.get('ANCHOR_WALLET'))
     parser.add_argument('--env', type=str, default='devnet')
     parser.add_argument('--file', type=str, default="history.h5")
-    parser.add_argument('--subaccount', type=int, required=False, default=0)
 
     args = parser.parse_args()
 
@@ -406,15 +433,12 @@ if __name__ == '__main__':
 
     if args.env == 'devnet':
         url = 'https://api.devnet.solana.com'
-    elif args.env == 'mainnet':
-        url = 'https://api.mainnet-beta.solana.com'
     else:
-        raise NotImplementedError('only devnet/mainnet env supported')
+        raise NotImplementedError('only devnet env supported at this time')
 
     asyncio.run(main(
         args.keypath, 
         args.env, 
         url,
-        args.subaccount,
         args.file,
     ))
