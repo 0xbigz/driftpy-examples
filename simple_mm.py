@@ -2,6 +2,10 @@
 Simple Market Maker using driftpy.
 Sameer Lal
 
+WRITEUP BELOW:
+    https://docs.google.com/document/d/1-RLxJFIUnLdCsSEhgFzScwMichheS_FlFB17M6HmmYQ/edit?usp=sharing
+
+
 Setup:
     * Include the following in ~/.config/solana/key.json: <redacted, in google docs> 
         This account has already airdropped tokens on devnet and is registered w/drift with collateral
