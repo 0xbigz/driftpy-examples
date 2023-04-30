@@ -1,23 +1,30 @@
-import os
-import json
-import copy
+"""
+Simple Market Maker using driftpy.
 
-from anchorpy import Wallet
-from anchorpy import Provider
+Functionalities:
+    + Fetches list of outstanding limit orders, cleans it up into a simple orderbook
+    + Makes market incorporating buy/sell pressure from orderbook and current position
+"""
+
+import os, json, copy, requests
+
+from anchorpy import Wallet, Provider
+# from anchorpy import Provider
 from solana.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 
 from driftpy.constants.config import configs
 from driftpy.types import *
-#MarketType, OrderType, OrderParams, PositionDirection, OrderTriggerCondition
 
 from driftpy.clearing_house import ClearingHouse
 from driftpy.clearing_house_user import ClearingHouseUser
 from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
 from borsh_construct.enum import _rust_enum
 
-import requests, json
 import pandas as pd
+import numpy as np
+
+pd.options.mode.chained_assignment = None
 
 
 URL_DEVNET_OB = "https://master.dlob.drift.trade/orders/json"
@@ -31,9 +38,6 @@ class PostOnlyParams:
     NONE = constructor()
     TRY_POST_ONLY = constructor()
     MUST_POST_ONLY = constructor()
-
-
-
 
 def orderbook_all(perp_market="SOL-PERP"):
     """ Queries DEVNET orderbok for specified perp market, organizes data into bid/asks sorted
@@ -104,15 +108,12 @@ def orderbook_expanded(perp_market="SOL-PERP"):
     """
     _, bid, ask = orderbook_all(perp_market)
     
-    
-    
     bid_simple = bid[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
     ask_simple = ask[["price", "baseAssetAmount", "baseAssetAmountFilled", "postOnly", "oraclePriceOffset", "oraclePrice"]]
 
     #### SOME ARE PARTIALLY FILLED
     bid_simple["qty"] = bid_simple["baseAssetAmount"] - bid_simple["baseAssetAmountFilled"]
     ask_simple["qty"] = ask_simple["baseAssetAmount"] - ask_simple["baseAssetAmountFilled"]
-    
 
     return bid_simple, ask_simple
 
@@ -131,6 +132,7 @@ def dlob_metrics(bid_ob, ask_ob, oraclePrice=None):
     """
         Returns various metrics on L2 orderbook, either in absolute terms or scaled by oraclePrice 
     """
+    # Look at weighted average of the top of the book .. can signal short term volatiltiy
     tob = bid_ob.iloc[:3].reset_index()
     toa = ask_ob.iloc[:3].reset_index()
 
@@ -151,52 +153,68 @@ def dlob_metrics(bid_ob, ask_ob, oraclePrice=None):
         }
     
 
-async def get_solana_perp_oracle():
+def mm_order_single(order_offset, order_direction, order_qty):
+    
+    return OrderParams(
+        order_type=OrderType.LIMIT(),
+        market_type=MarketType.PERP(),
+        direction=order_direction,
+        user_order_id=0,
+        base_asset_amount = int(order_qty * BASE_PRECISION),
+        price=0,
+        market_index=0,
+        reduce_only=False,
+        post_only=PostOnlyParams.TRY_POST_ONLY(),
+        immediate_or_cancel=False,
+        trigger_price=0,
+        trigger_condition=OrderTriggerCondition.ABOVE(),
+        oracle_price_offset= int(order_offset * PRICE_PRECISION),
+        auction_duration=None,
+        max_ts=None,
+        auction_start_price=None,
+        auction_end_price=None,
+    )
+
+
+
+
+async def get_solana_perp_oracle(chu):
     """ return SOL-PERP oracle """
-    with open(os.path.expanduser("/home/sjl/.config/solana/key.json"), 'r') as f: secret = json.load(f)
-    kp = Keypair.from_secret_key(bytes(secret))
-    subaccount = 0
-    print('using public key:', kp.public_key, " subaccount = ", subaccount)
-
-    env = 'devnet'
-    config = configs[env]
-    wallet = Wallet(kp) 
-    connection = AsyncClient(config.default_http)
-    provider = Provider(connection, wallet)
-
-    ch = ClearingHouse.from_config(config, provider)
-    chu = ClearingHouseUser(ch, authority=ch, subaccount_id=subaccount)
     perp_market = await chu.get_perp_market(0)
     oracle = (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION
 
     return oracle
 
 
-
-
-
-bid_offsets = [-10, -12, -15]
-bid_qtys    = [1.1, 2.2, 1.1]
-
-ask_offsets = [10, 12, 15]
-ask_qtys    = [1.1, 2.2, 1.1]
-
-# await construct_and_place(bid_offsets, bid_qtys, ask_offsets, ask_qtys)
-
-
-
-
-
+async def construct_and_place(drift_acct, bid_offsets, bid_qtys, ask_offsets, ask_qtys, cancel_existing=True):
+    """
+        Bundles offsets / quantities for bids / asks into an array of orders
+        and places order
+        
+        cancels existing orders before placing
+    """
+    all_orders = []
+    if(cancel_existing):
+        all_orders.append(await drift_acct.get_cancel_orders_ix(0))
+    for bo, bq in zip(bid_offsets, bid_qtys):
+        if(bq > 0):
+            temp_order = mm_order_single(bo, PositionDirection.LONG(), bq)
+            all_orders.append(
+                await drift_acct.get_place_perp_order_ix(temp_order, 0)
+            )
+    for ao, aq in zip(ask_offsets, ask_qtys):
+        if(aq > 0):
+            all_orders.append(
+                await drift_acct.get_place_perp_order_ix(mm_order_single(ao, PositionDirection.SHORT(), aq), 0)
+            )
+    ret = await drift_acct.send_ixs(all_orders)
+    return ret
 
 async def main(
     keypath, 
     env, 
     url, 
-    market_name,
-    base_asset_amount,
     subaccount_id,
-    spread = .01,
-    offset = 0,
 ):
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
     kp = Keypair.from_secret_key(bytes(secret))
@@ -207,76 +225,115 @@ async def main(
     provider = Provider(connection, wallet)
     drift_acct = ClearingHouse.from_config(config, provider)
 
-    is_perp  = 'PERP' in market_name.upper()
-    market_type = MarketType.PERP() if is_perp else MarketType.SPOT()
+    chu        = ClearingHouseUser(drift_acct, use_cache=True)
 
-    market_index = -1
-    for perp_market_config in config.markets:
-        if perp_market_config.symbol == market_name:
-            market_index = perp_market_config.market_index
-    for spot_market_config in config.banks:
-        if spot_market_config.symbol == market_name:
-            market_index = spot_market_config.bank_index
+    ## Margin is as maintained on the exchange (can be adjusted with deposits)
+    TARGET_MAX_SIZE = 100
+    LEVERAGE_LIMIT  = 2
+    AGGRESSION      = 50e-4 # 50 bips
+    SLEEP_INTERVAL  = 10 # In seconds
 
-    default_order_params = OrderParams(
-                order_type=OrderType.LIMIT(),
-                market_type=market_type,
-                direction=PositionDirection.LONG(),
-                user_order_id=0,
-                base_asset_amount=int(base_asset_amount * BASE_PRECISION),
-                price=0,
-                market_index=market_index,
-                reduce_only=False,
-                post_only=PostOnlyParams.TRY_POST_ONLY(),
-                immediate_or_cancel=False,
-                trigger_price=0,
-                trigger_condition=OrderTriggerCondition.ABOVE(),
-                oracle_price_offset=0,
-                auction_duration=None,
-                max_ts=None,
-                auction_start_price=None,
-                auction_end_price=None,
-            )
+    async def get_stats(chu):
+        perp_market = await chu.get_perp_market(0)
+        return {
+            "unrealized_pnl" : await chu.get_unrealized_pnl() / PRICE_PRECISION,
+            "oracle_price"   : (await chu.get_perp_oracle_data(perp_market)).price / PRICE_PRECISION,
+            "curr_leverage"  : ( await chu.get_leverage() ) / 10_000,  # h/t bigz,
+            "SOL_PERP_pos"   : (await chu.get_user_position(0))
+        }
+    
+    ##############
+    ## Main event loop
+    ##############
 
-    bid_order_params = copy.deepcopy(default_order_params)
-    bid_order_params.direction = PositionDirection.LONG()
-    bid_order_params.oracle_price_offset = int((offset - spread/2) * PRICE_PRECISION)
-             
-    ask_order_params = copy.deepcopy(default_order_params)
-    ask_order_params.direction = PositionDirection.SHORT()
-    ask_order_params.oracle_price_offset = int((offset + spread/2) * PRICE_PRECISION)
+    epoch = 0 # So it doesn't run infinitely 
+    while epoch < 10:
+        
+        print("Epoch: ", epoch)
+        epoch += 1
+        
+        ## ---------- Pull stats  --------------
+        await chu.set_cache()
+        stats = await get_stats(chu)
+        print(stats)
+        
+        # (1) Current SOL-PERP position
+        pp = stats['SOL_PERP_pos'] #await chu.get_user_position(0)
+        current_pos = pp.base_asset_amount / 1e9  
+        print(f"> current pos = {current_pos}")
+        
+        # (2): Get the current order book (GET Request)
+        bid_ob, ask_ob = get_dlob()
 
-    order_print([bid_order_params, ask_order_params], market_name)
-
-    perp_orders_ix = []
-    spot_orders_ix = []
-    if is_perp:
-        perp_orders_ix = [
-            await drift_acct.get_place_perp_order_ix(bid_order_params, subaccount_id),
-            await drift_acct.get_place_perp_order_ix(ask_order_params, subaccount_id)
-            ]
-    else:
-        spot_orders_ix =  [
-            await drift_acct.get_place_spot_order_ix(bid_order_params, subaccount_id),
-            await drift_acct.get_place_spot_order_ix(ask_order_params, subaccount_id)
-        ]
-
-    await drift_acct.send_ixs(
-        [
-        await drift_acct.get_cancel_orders_ix(subaccount_id),
-        ] + perp_orders_ix + spot_orders_ix
-    )
+        # (3): Calculate the fair price based on the order book
+        metrics = dlob_metrics(bid_ob, ask_ob, stats['oracle_price'])
+        print(f"> dlob metrics = {metrics}")
+        
+        ## PART 2: Prepare new bids / ask price points
+        
+        #### Signals --- very simple ----
+        
+        ## check if overleveraged -- here we need to reduce position immediately
+        over_leveraged = True if stats['curr_leverage'] > 0.8 * LEVERAGE_LIMIT else False
+        
+        ## Backoff position if needed
+        engage_sell_pressure  = True if current_pos > TARGET_MAX_SIZE  * 0.8 else False # Hyperparemeter 
+        engage_buy_pressure   = True if current_pos < -TARGET_MAX_SIZE * 0.8 else False # Hyperparemeter 
+        
+        ## no bid / no ask
+        no_bid = True if over_leveraged and engage_sell_pressure else False
+        no_ask = True if over_leveraged and engage_buy_pressure else False
+        
+            
+        ## Adjustment on buy / sell spread due to buying and selling pressure in orderbook
+        if(metrics['bid_avg'] <= stats['oracle_price'] <= metrics['ask_avg']):
+            
+            ask_to_bid_factor = (metrics['ask_avg'] - stats['oracle_price']) / (stats['oracle_price'] - metrics['bid_avg'])
+            if(ask_to_bid_factor > 1):
+                ask_adj_factor = 1 + np.ln(ask_to_bid_factor)
+            elif(ask_to_bid_factor < 1):
+                bid_adj_factor = 1 + np.ln(ask_to_bid_factor)
+        
+        # ------ bid side -------
+        ## Compute total size
+        bid_target_pos     = max(0, TARGET_MAX_SIZE - current_pos)
+        bid_offset_width   = AGGRESSION 
+        if(engage_buy_pressure):
+            bid_offset_width *= 0.5 #Hyperparemeter
+            
+        bid_offsets        = np.linspace(0, bid_offset_width, 4)[1:]
+        bid_qts            = bid_target_pos * np.array([0.25, 0.5, 0.25])
+        
+        print(f"> bid_target_pos = {bid_target_pos}")
+        print(f"> bid_offsets = {bid_offsets}")
+        print(f"> bid_qts = {bid_qts}")
+        
+        # ------ ask side -------
+        ask_target_pos   = max(0, TARGET_MAX_SIZE + current_pos)
+        ask_offset_width = AGGRESSION
+        if(engage_sell_pressure):
+            ask_offset_width *= 0.5
+        
+        ask_offsets      = np.linspace(0, ask_offset_width, 4)[1:]
+        ask_qts          = ask_target_pos * np.array([0.25, 0.5, 0.25])
+        print(f"> ask_target_pos = {ask_target_pos}")
+        print(f"> ask_prices = {ask_offsets}")
+        print(f"> ask_qts = {ask_qts}")
+        
+        ## ---------- Send order  --------------
+        ret = await construct_and_place(drift_acct, bid_offsets, bid_qts, ask_offsets, ask_qts)
+        print(ret)
+        
+        ## ---------- Logging --------------    
+        # Step 6: Wait for 1 second before repeating the loop
+        await asyncio.sleep(SLEEP_INTERVAL)
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--keypath', type=str, required=False, default=os.environ.get('ANCHOR_WALLET'))
     parser.add_argument('--env', type=str, default='devnet')
-    parser.add_argument('--amount', type=float, required=True)
-    parser.add_argument('--market', type=str, required=True)
     parser.add_argument('--subaccount', type=int, required=False, default=0)
-    parser.add_argument('--spread', type=float, required=False, default=.01) # $0.01
-    parser.add_argument('--offset', type=float, required=False, default=0) # $0.00
 
     args = parser.parse_args()
 
@@ -299,12 +356,7 @@ if __name__ == '__main__':
         args.keypath, 
         args.env, 
         url,
-        args.market, 
-        args.amount,
         args.subaccount,
-        args.spread,
-        args.offset,
     ))
-
 
 
