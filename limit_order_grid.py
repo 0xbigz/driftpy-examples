@@ -91,9 +91,9 @@ async def main(
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
-    drift_acct = ClearingHouse.from_config(config, provider)
+    drift_acct = ClearingHouse.from_config(config, provider, authority=PublicKey('GtBCTfWPDJRmXHrCZULKa5HfX8tmkFciMYpSM5QHja8d'))
     chu = ClearingHouseUser(drift_acct)
-
+    print((await chu.get_user()).__dict__)
     is_perp  = 'PERP' in market_name.upper()
     market_type = MarketType.PERP() if is_perp else MarketType.SPOT()
 
@@ -115,7 +115,11 @@ async def main(
             )
         oracle_data = await get_oracle_data(connection, market.amm.oracle)
         current_price = oracle_data.price/PRICE_PRECISION
-        current_pos = (await chu.get_user_position(market_index)).base_asset_amount/float(BASE_PRECISION)
+        current_pos_raw = (await chu.get_user_position(market_index))
+        if current_pos_raw is not None:
+            current_pos = (current_pos_raw.base_asset_amount/float(BASE_PRECISION))
+        else:
+            current_pos = 0
 
     else:
         market = await get_spot_market_account( drift_acct.program, market_index)
@@ -189,7 +193,7 @@ async def main(
         perp_orders_ix = await drift_acct.get_place_perp_orders_ix(order_params, subaccount_id)
     else:
         spot_orders_ix =  await drift_acct.get_place_spot_orders_ix(order_params, subaccount_id)
-
+    # perp_orders_ix = [ await drift_acct.get_place_perp_order_ix(order_params[0], subaccount_id)]
     await drift_acct.send_ixs(
         perp_orders_ix + spot_orders_ix
     )
