@@ -85,7 +85,6 @@ async def main(
 ):
     if min_position is not None and max_position is not None:
         assert(min_position < max_position)
-        
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
     kp = Keypair.from_secret_key(bytes(secret))
     print('using public key:', kp.public_key, 'subaccount=', subaccount_id)
