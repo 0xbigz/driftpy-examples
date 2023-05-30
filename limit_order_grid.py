@@ -81,6 +81,7 @@ async def main(
     lower_price,
     min_position,
     max_position,
+    authority=None,
 ):
     if min_position is not None and max_position is not None:
         assert(min_position < max_position)
@@ -91,7 +92,7 @@ async def main(
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
-    drift_acct = ClearingHouse.from_config(config, provider, authority=PublicKey('GtBCTfWPDJRmXHrCZULKa5HfX8tmkFciMYpSM5QHja8d'))
+    drift_acct = ClearingHouse.from_config(config, provider, authority=PublicKey(authority))
     chu = ClearingHouseUser(drift_acct)
     print((await chu.get_user()).__dict__)
     is_perp  = 'PERP' in market_name.upper()
@@ -211,7 +212,7 @@ if __name__ == '__main__':
     parser.add_argument('--upper-price', type=float, required=False,  default=None)
     parser.add_argument('--grids', type=int, required=True)
     parser.add_argument('--subaccount', type=int, required=False, default=0)
-
+    parser.add_argument('--authority', type=str, required=False, default=None)
     args = parser.parse_args()
 
     # assert(args.spread > 0, 'spread must be > $0')
@@ -242,7 +243,8 @@ if __name__ == '__main__':
         args.upper_price,
         args.lower_price,
         args.min_position,
-        args.max_position
+        args.max_position,
+        args.authority
     ))
 
 
