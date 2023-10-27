@@ -19,6 +19,12 @@ async def main(keypath,
                name,
                action,
                delegate,
+               management_fee,
+               profit_share,
+               redeem_period,
+               max_tokens,
+               min_deposit_amount,
+               permissioned,
                ):
     with open(os.path.expanduser(keypath), 'r') as f:
         secret = json.load(f)
@@ -73,13 +79,13 @@ async def main(keypath,
         params = {
             'name': char_number_array,
             'spot_market_index': spot_market_index,  # USDC spot market index
-            'redeem_period': int(60 * 60 * 24 * 30),  # 30 days
-            'max_tokens': int(1_000_000 * 1e6),
-            'min_deposit_amount': int(100 * 1e6),
-            'management_fee': int(.02 * 1e6),
-            'profit_share': int(.2 * 1e6),
+            'redeem_period': redeem_period,  # 30 days
+            'max_tokens': max_tokens,
+            'min_deposit_amount': min_deposit_amount,
+            'management_fee': management_fee,
+            'profit_share': profit_share,
             'hurdle_rate': 0,  # no supported atm
-            'permissioned': False,
+            'permissioned': permissioned,
         }
 
         # vault_ata = get_associated_token_address(drift_client.authority, spot_market.mint)
@@ -137,6 +143,12 @@ if __name__ == '__main__':
     parser.add_argument('--name', type=str, required=True, default='devnet')
     parser.add_argument('--env', type=str, default='devnet')
     parser.add_argument('--action', choices=['init', 'update-delegate'], required=True)
+    parser.add_argument('--management-fee', type=int, required=False, default=int(.02 * 1e6))
+    parser.add_argument('--profit-share', type=int, required=False, default=int(.02 * 1e6))
+    parser.add_argument('--redeem-period', type=int, required=False, default=int(60 * 60 * 24 * 30))
+    parser.add_argument('--max-tokens', type=int, required=False, default=int(1_000_000 * 1e6))
+    parser.add_argument('--min-deposit-amount', type=int, required=False, default=int(100 * 1e6))
+    parser.add_argument('--permissioned', type=int, required=False, default=False)
     parser.add_argument('--delegate', type=str, default=None)
     args = parser.parse_args()
 
@@ -164,5 +176,11 @@ if __name__ == '__main__':
         url,
         args.name,
         args.action,
-        args.delegate
+        args.delegate,
+        args.management_fee,
+        args.profit_share,
+        args.redeem_period,
+        args.max_tokens,
+        args.min_deposit_amount,
+        args.permissioned,
     ))
