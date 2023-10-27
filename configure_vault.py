@@ -159,6 +159,9 @@ async def main(keypath,
         txSig = await vault_program.provider.send(tx)
         print(f"tx sig {txSig}")
 
+    vault_account = await vault_program.account.get('Vault').fetch(vault_pubkey, "processed")
+    print("vault account", vault_account)
+
 
 def get_fee_param(fee, param_name):
     if fee > 1 or fee < 0:
