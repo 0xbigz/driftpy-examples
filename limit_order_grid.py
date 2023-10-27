@@ -92,7 +92,11 @@ async def main(
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
-    drift_acct = ClearingHouse.from_config(config, provider, authority=PublicKey(authority))
+    if authority:
+        authority_pubkey = PublicKey(authority)
+    else:
+        authority_pubkey = None
+    drift_acct = ClearingHouse.from_config(config, provider, authority=authority_pubkey)
     chu = ClearingHouseUser(drift_acct)
     is_perp  = 'PERP' in market_name.upper()
     market_type = MarketType.PERP() if is_perp else MarketType.SPOT()
