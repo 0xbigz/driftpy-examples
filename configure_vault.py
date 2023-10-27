@@ -75,7 +75,9 @@ async def main(keypath,
         drift_client.program, spot_market_index
     )
 
-    if action == 'init':
+    print(f"action {action}")
+
+    if action == 'init-vault':
         params = {
             'name': char_number_array,
             'spot_market_index': spot_market_index,  # USDC spot market index
@@ -117,6 +119,29 @@ async def main(keypath,
         tx.add(instruction)
         txSig = await vault_program.provider.send(tx)
         print(f"tx sig {txSig}")
+    if action == 'update-vault':
+        params = {
+            'redeem_period': redeem_period,  # 30 days
+            'max_tokens': max_tokens,
+            'min_deposit_amount': min_deposit_amount,
+            'management_fee': management_fee,
+            'profit_share': profit_share,
+            'hurdle_rate': None,  # no supported atm
+            'permissioned': permissioned,
+        }
+        instruction = vault_program.instruction['update_vault'](
+            params,
+            ctx=Context(
+                accounts={
+                    'vault': vault_pubkey,
+                    'manager': drift_client.signer.public_key,
+                }),
+        )
+
+        tx = Transaction()
+        tx.add(instruction)
+        txSig = await vault_program.provider.send(tx)
+        print(f"tx sig {txSig}")
     elif action == 'update-delegate':
         instruction = vault_program.instruction['update_delegate'](
             PublicKey(delegate),
@@ -135,6 +160,16 @@ async def main(keypath,
         print(f"tx sig {txSig}")
 
 
+def get_fee_param(fee, param_name):
+    if fee > 1 or fee < 0:
+        raise ValueError(f"{param_name} must be between 0 and 1")
+    return int(fee * 1e6)
+
+def get_token_amount_param(amount, param_name):
+    if amount < 0:
+        raise ValueError(f"{param_name} must be greater than 0")
+    return int(amount * 1e6)
+
 if __name__ == '__main__':
     import argparse
 
@@ -142,13 +177,13 @@ if __name__ == '__main__':
     parser.add_argument('--keypath', type=str, required=False, default=os.environ.get('ANCHOR_WALLET'))
     parser.add_argument('--name', type=str, required=True, default='devnet')
     parser.add_argument('--env', type=str, default='devnet')
-    parser.add_argument('--action', choices=['init', 'update-delegate'], required=True)
-    parser.add_argument('--management-fee', type=int, required=False, default=int(.02 * 1e6))
-    parser.add_argument('--profit-share', type=int, required=False, default=int(.02 * 1e6))
-    parser.add_argument('--redeem-period', type=int, required=False, default=int(60 * 60 * 24 * 30))
-    parser.add_argument('--max-tokens', type=int, required=False, default=int(1_000_000 * 1e6))
-    parser.add_argument('--min-deposit-amount', type=int, required=False, default=int(100 * 1e6))
-    parser.add_argument('--permissioned', type=int, required=False, default=False)
+    parser.add_argument('--action', choices=['init-vault', 'update-delegate', 'update-vault'], required=True)
+    parser.add_argument('--management-fee', type=float, required=False, default=None)
+    parser.add_argument('--profit-share', type=float, required=False, default=None)
+    parser.add_argument('--redeem-period', type=int, required=False, default=None)
+    parser.add_argument('--max-tokens', type=int, required=False, default=None)
+    parser.add_argument('--min-deposit-amount', type=int, required=False, default=None)
+    parser.add_argument('--permissioned', type=int, required=False, default=None)
     parser.add_argument('--delegate', type=str, default=None)
     args = parser.parse_args()
 
@@ -158,8 +193,51 @@ if __name__ == '__main__':
         else:
             args.keypath = os.environ['ANCHOR_WALLET']
 
-    if args.action == 'update-delegate' and args.delegate is None:
-        raise ValueError('update-delegate requires that you pass a delegate')
+    action = args.action
+
+    management_fee = args.management_fee
+    profit_share = args.profit_share
+    redeem_period = args.redeem_period
+    max_tokens = args.max_tokens
+    min_deposit_amount = args.min_deposit_amount
+    permissioned = args.permissioned
+
+    if action == 'init-vault':
+        if management_fee is None:
+            management_fee = .2
+
+        if profit_share is None:
+            profit_share = .02
+
+        if redeem_period is None:
+            redeem_period = int(60 * 60 * 24 * 30)
+
+        if max_tokens is None:
+            max_tokens = int(1_000_000)
+
+        if min_deposit_amount is None:
+            min_deposit_amount = int(100)
+
+        if permissioned is None:
+            permissioned = False
+
+    # handle some santization/formatting
+    if action == 'init-vault' or action == 'update-vault':
+        if management_fee is not None:
+            management_fee = get_fee_param(management_fee, 'management fee')
+
+        if profit_share is not None:
+            profit_share = get_fee_param(profit_share, 'profit share')
+
+        if max_tokens is not None:
+            max_tokens = get_token_amount_param(max_tokens, 'max tokens')
+
+        if min_deposit_amount is not None:
+            min_deposit_amount = get_token_amount_param(min_deposit_amount, 'min deposit amount')
+
+    if args.action == 'update-delegate':
+        if args.delegate is None:
+            raise ValueError('update-delegate requires that you pass a delegate')
 
     if args.env == 'devnet':
         url = 'https://api.devnet.solana.com'
@@ -177,10 +255,10 @@ if __name__ == '__main__':
         args.name,
         args.action,
         args.delegate,
-        args.management_fee,
-        args.profit_share,
-        args.redeem_period,
-        args.max_tokens,
-        args.min_deposit_amount,
-        args.permissioned,
+        management_fee,
+        profit_share,
+        redeem_period,
+        max_tokens,
+        min_deposit_amount,
+        permissioned,
     ))
