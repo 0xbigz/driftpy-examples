@@ -67,7 +67,8 @@ async def main(keypath,
 
     print(f"vault user : {vault_user}")
 
-    vault_user_stats = get_user_stats_account_public_key(drift_client.program_id, vault_pubkey)
+    vault_user_stats = get_user_stats_account_public_key(
+        drift_client.program_id, vault_pubkey)
 
     spot_market_index = 0
 
@@ -168,19 +169,28 @@ def get_fee_param(fee, param_name):
         raise ValueError(f"{param_name} must be between 0 and 1")
     return int(fee * 1e6)
 
+
 def get_token_amount_param(amount, param_name):
     if amount < 0:
         raise ValueError(f"{param_name} must be greater than 0")
     return int(amount * 1e6)
 
+
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--keypath', type=str, required=False, default=os.environ.get('ANCHOR_WALLET'))
+    parser.add_argument('--keypath', type=str, required=False,
+                        default=os.environ.get('ANCHOR_WALLET'))
     parser.add_argument('--name', type=str, required=True, default='devnet')
     parser.add_argument('--env', type=str, default='devnet')
-    parser.add_argument('--action', choices=['init-vault', 'update-delegate', 'update-vault'], required=True)
+    parser.add_argument(
+        '--action',
+        choices=[
+            'init-vault',
+            'update-delegate',
+            'update-vault'],
+        required=True)
     parser.add_argument('--management-fee', type=float, required=False, default=None)
     parser.add_argument('--profit-share', type=float, required=False, default=None)
     parser.add_argument('--redeem-period', type=int, required=False, default=None)
@@ -236,7 +246,8 @@ if __name__ == '__main__':
             max_tokens = get_token_amount_param(max_tokens, 'max tokens')
 
         if min_deposit_amount is not None:
-            min_deposit_amount = get_token_amount_param(min_deposit_amount, 'min deposit amount')
+            min_deposit_amount = get_token_amount_param(
+                min_deposit_amount, 'min deposit amount')
 
     if args.action == 'update-delegate':
         if args.delegate is None:

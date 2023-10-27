@@ -6,6 +6,7 @@ anyio==3.6.2
 apischema==0.17.5
 async-timeout==4.0.2
 attrs==22.1.0
+autopep8==2.0.4
 backoff==2.2.1
 base58==2.1.1
 based58==0.1.1
