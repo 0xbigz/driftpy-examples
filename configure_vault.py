@@ -239,10 +239,10 @@ if __name__ == '__main__':
             redeem_period = int(60 * 60 * 24 * 30)
 
         if max_tokens is None:
-            max_tokens = int(1_000_000)
+            max_tokens = int(0)
 
         if min_deposit_amount is None:
-            min_deposit_amount = int(100)
+            min_deposit_amount = int(0)
 
         if permissioned is None:
             permissioned = False
