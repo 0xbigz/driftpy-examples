@@ -26,6 +26,7 @@ async def main(keypath,
                max_tokens,
                min_deposit_amount,
                permissioned,
+               deposit_amount,
                ):
     with open(os.path.expanduser(keypath), 'r') as f:
         secret = json.load(f)
@@ -92,7 +93,6 @@ async def main(keypath,
             'permissioned': permissioned,
         }
 
-        # vault_ata = get_associated_token_address(drift_client.authority, spot_market.mint)
         ata = PublicKey.find_program_address(
             [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
         )[0]
@@ -185,6 +185,48 @@ async def main(keypath,
         tx.add(instruction)
         txSig = await vault_program.provider.send(tx)
         print(f"tx sig {txSig}")
+    elif action == 'deposit':
+        depositor_pubkey = drift_client.signer.public_key
+        vault_depositor_pubkey = PublicKey.find_program_address(
+            [b"vault_depositor", bytes(vault_pubkey), bytes(
+                depositor_pubkey)], PublicKey(pid)
+        )[0]
+
+        vault_ata = PublicKey.find_program_address(
+            [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
+        )[0]
+
+        depositor_ata = get_associated_token_address(drift_client.signer.public_key, spot_market.mint)
+
+        print(f"vault depositor pubkey : {vault_depositor_pubkey}")
+
+        remaining_accounts = await drift_client.get_remaining_accounts(writable_spot_market_index=spot_market_index, user_id=[0], authority=vault_pubkey)
+
+        instruction = vault_program.instruction['deposit'](
+            deposit_amount,
+            ctx=Context(
+                accounts={
+                    'vault': vault_pubkey,
+                    'vault_depositor': vault_depositor_pubkey,
+                    'authority': drift_client.signer.public_key,
+                    'drift_spot_market': spot_market.pubkey,
+                    'drift_spot_market_vault': spot_market.vault,
+                    'drift_user_stats': vault_user_stats,
+                    'drift_user': vault_user,
+                    'drift_state': drift_client.get_state_public_key(),
+                    'token_program': TOKEN_PROGRAM_ID,
+                    'drift_program': drift_client.program_id,
+                    'vault_token_account': vault_ata,
+                    'user_token_account': depositor_ata,
+                },
+                remaining_accounts=remaining_accounts
+            ),
+        )
+
+        tx = Transaction()
+        tx.add(instruction)
+        txSig = await vault_program.provider.send(tx)
+        print(f"tx sig {txSig}")
 
     vault_account = await vault_program.account.get('Vault').fetch(vault_pubkey, "processed")
     print("vault account", vault_account)
@@ -207,7 +249,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--keypath', type=str, required=False,
-                        default=os.environ.get('ANCHOR_WALLET'), help='path to keypair for manager')
+                        default=os.environ.get('ANCHOR_WALLET'), help='path to keypair for manager/depositor')
     parser.add_argument('--name', type=str, required=True, default='devnet',
                         help='name of the vault. uniquely identifies the vault')
     parser.add_argument('--cluster', type=str,         choices=[
@@ -220,7 +262,9 @@ if __name__ == '__main__':
             'init-vault',
             'init-depositor',
             'update-delegate',
-            'update-vault'],
+            'update-vault',
+            'deposit',
+        ],
         required=True,
         help='the action to perform. init-vault will create a new vault, init-depositor will create a depositor for permissioned vault, update-vault will update an existing vault, update-delegate will update the delegate of a vault'
     )
@@ -240,6 +284,8 @@ if __name__ == '__main__':
                         help='the delegate to update the vault to (only used for update-delegate action)')
     parser.add_argument('--depositor', type=str, default=None,
                         help='the depositor to initialize for permisisoned vault (only used for init-depositor action)')
+    parser.add_argument('--deposit-amount', type=int, default=None,
+                        help='the amount of tokens to deposit into the vault (only used for deposit action)')
     args = parser.parse_args()
 
     if args.keypath is None:
@@ -299,6 +345,12 @@ if __name__ == '__main__':
         if args.depositor is None:
             raise ValueError('init-depositor requires that you pass a depositor')
 
+    deposit_amount = args.deposit_amount
+    if args.action == 'deposit':
+        if deposit_amount is None:
+            raise ValueError('deposit requires that you pass a deposit amount')
+        deposit_amount = get_token_amount_param(deposit_amount, 'deposit amount')
+
     if args.cluster == 'devnet':
         url = 'https://api.devnet.solana.com'
     elif args.cluster == 'mainnet':
@@ -322,4 +374,5 @@ if __name__ == '__main__':
         max_tokens,
         min_deposit_amount,
         permissioned,
+        deposit_amount
     ))
