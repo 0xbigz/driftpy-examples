@@ -181,23 +181,36 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--keypath', type=str, required=False,
-                        default=os.environ.get('ANCHOR_WALLET'))
-    parser.add_argument('--name', type=str, required=True, default='devnet')
-    parser.add_argument('--env', type=str, default='devnet')
+                        default=os.environ.get('ANCHOR_WALLET'), help='path to keypair for manager')
+    parser.add_argument('--name', type=str, required=True, default='devnet',
+                        help='name of the vault. uniquely identifies the vault')
+    parser.add_argument('--cluster', type=str,         choices=[
+        'devnet',
+        'mainnet-beta'],
+        default='devnet', help='the cluster to connect to')
     parser.add_argument(
         '--action',
         choices=[
             'init-vault',
             'update-delegate',
             'update-vault'],
-        required=True)
-    parser.add_argument('--management-fee', type=float, required=False, default=None)
-    parser.add_argument('--profit-share', type=float, required=False, default=None)
-    parser.add_argument('--redeem-period', type=int, required=False, default=None)
-    parser.add_argument('--max-tokens', type=int, required=False, default=None)
-    parser.add_argument('--min-deposit-amount', type=int, required=False, default=None)
-    parser.add_argument('--permissioned', type=int, required=False, default=None)
-    parser.add_argument('--delegate', type=str, default=None)
+        required=True,
+        help='the action to perform. init-vault will create a new vault, update-vault will update an existing vault, update-delegate will update the delegate of a vault'
+    )
+    parser.add_argument('--management-fee', type=float, required=False, default=None,
+                        help='the management fee applied to vault deposits (between 0 and 1). 0.2 = 20%%')
+    parser.add_argument('--profit-share', type=float, required=False, default=None,
+                        help='the profit share applied to vault pnl (between 0 and 1). 0.2 = 20%%')
+    parser.add_argument('--redeem-period', type=int, required=False, default=None,
+                        help='the redeem period in seconds. eg 1 day redeem period = 86400')
+    parser.add_argument('--max-tokens', type=int, required=False, default=None,
+                        help='the max number of tokens that can be deposited into the vault')
+    parser.add_argument('--min-deposit-amount', type=int, required=False, default=None,
+                        help='the minimum amount of tokens that must be deposited into the vault at one time')
+    parser.add_argument('--permissioned', type=int, required=False, default=None,
+                        help='whether the vault is permissioned or not. if permissioned, vault manager must initialize depositor account')
+    parser.add_argument('--delegate', type=str, default=None,
+                        help='the delegate to update the vault to (only used for update-delegate action)')
     args = parser.parse_args()
 
     if args.keypath is None:
