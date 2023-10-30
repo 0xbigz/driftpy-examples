@@ -19,6 +19,7 @@ async def main(keypath,
                name,
                action,
                delegate,
+               depositor,
                management_fee,
                profit_share,
                redeem_period,
@@ -159,6 +160,31 @@ async def main(keypath,
         tx.add(instruction)
         txSig = await vault_program.provider.send(tx)
         print(f"tx sig {txSig}")
+    elif action == 'init-depositor':
+        depositor_pubkey = PublicKey(depositor)
+        vault_depositor_pubkey = PublicKey.find_program_address(
+            [b"vault_depositor", bytes(vault_pubkey), bytes(
+                depositor_pubkey)], PublicKey(pid)
+        )[0]
+
+        print(f"vault depositor pubkey : {vault_depositor_pubkey}")
+
+        instruction = vault_program.instruction['initialize_vault_depositor'](
+            ctx=Context(
+                accounts={
+                    'vault': vault_pubkey,
+                    'vault_depositor': vault_depositor_pubkey,
+                    'authority': depositor_pubkey,
+                    'payer': drift_client.signer.public_key,
+                    "rent": SYSVAR_RENT_PUBKEY,
+                    "system_program": SYS_PROGRAM_ID,
+                }),
+        )
+
+        tx = Transaction()
+        tx.add(instruction)
+        txSig = await vault_program.provider.send(tx)
+        print(f"tx sig {txSig}")
 
     vault_account = await vault_program.account.get('Vault').fetch(vault_pubkey, "processed")
     print("vault account", vault_account)
@@ -192,10 +218,11 @@ if __name__ == '__main__':
         '--action',
         choices=[
             'init-vault',
+            'init-depositor',
             'update-delegate',
             'update-vault'],
         required=True,
-        help='the action to perform. init-vault will create a new vault, update-vault will update an existing vault, update-delegate will update the delegate of a vault'
+        help='the action to perform. init-vault will create a new vault, init-depositor will create a depositor for permissioned vault, update-vault will update an existing vault, update-delegate will update the delegate of a vault'
     )
     parser.add_argument('--management-fee', type=float, required=False, default=None,
                         help='the management fee applied to vault deposits (between 0 and 1). 0.2 = 20%%')
@@ -207,10 +234,12 @@ if __name__ == '__main__':
                         help='the max number of tokens that can be deposited into the vault')
     parser.add_argument('--min-deposit-amount', type=int, required=False, default=None,
                         help='the minimum amount of tokens that must be deposited into the vault at one time')
-    parser.add_argument('--permissioned', type=int, required=False, default=None,
+    parser.add_argument('--permissioned', type=bool, required=False, default=None,
                         help='whether the vault is permissioned or not. if permissioned, vault manager must initialize depositor account')
     parser.add_argument('--delegate', type=str, default=None,
                         help='the delegate to update the vault to (only used for update-delegate action)')
+    parser.add_argument('--depositor', type=str, default=None,
+                        help='the depositor to initialize for permisisoned vault (only used for init-depositor action)')
     args = parser.parse_args()
 
     if args.keypath is None:
@@ -266,9 +295,13 @@ if __name__ == '__main__':
         if args.delegate is None:
             raise ValueError('update-delegate requires that you pass a delegate')
 
-    if args.env == 'devnet':
+    if args.action == 'init-depositor':
+        if args.depositor is None:
+            raise ValueError('init-depositor requires that you pass a depositor')
+
+    if args.cluster == 'devnet':
         url = 'https://api.devnet.solana.com'
-    elif args.env == 'mainnet':
+    elif args.cluster == 'mainnet':
         url = 'https://api.mainnet-beta.solana.com'
     else:
         raise NotImplementedError('only devnet/mainnet env supported')
@@ -277,11 +310,12 @@ if __name__ == '__main__':
 
     asyncio.run(main(
         args.keypath,
-        args.env,
+        args.cluster,
         url,
         args.name,
         args.action,
         args.delegate,
+        args.depositor,
         management_fee,
         profit_share,
         redeem_period,
