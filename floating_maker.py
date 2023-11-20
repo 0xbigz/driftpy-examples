@@ -4,14 +4,14 @@ import copy
 
 from anchorpy import Wallet
 from anchorpy import Provider
-from solana.keypair import Keypair
+from solders.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 
 from driftpy.constants.config import configs
 from driftpy.types import *
 #MarketType, OrderType, OrderParams, PositionDirection, OrderTriggerCondition
 
-from driftpy.clearing_house import ClearingHouse
+from driftpy.drift_client import DriftClient
 from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
 from borsh_construct.enum import _rust_enum
 
@@ -55,7 +55,7 @@ async def main(
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
-    drift_acct = ClearingHouse.from_config(config, provider)
+    drift_acct = DriftClient.from_config(config, provider)
 
     is_perp  = 'PERP' in market_name.upper()
     market_type = MarketType.PERP() if is_perp else MarketType.SPOT()

@@ -6,15 +6,17 @@ from anchorpy import Wallet
 from anchorpy import Provider
 
 from solana.rpc.async_api import AsyncClient
-from solana.keypair import Keypair
+from solders.keypair import Keypair
 from solana.rpc import commitment
+from solana.transaction import AccountMeta, Instruction
+from spl.token.constants import TOKEN_PROGRAM_ID
 
 import time
 
 from driftpy.constants.config import configs
-from driftpy.clearing_house import ClearingHouse
+from driftpy.drift_client import DriftClient
 from driftpy.accounts import *
-from driftpy.clearing_house_user import ClearingHouseUser
+from driftpy.drift_user import DriftUser
 
 async def view_logs(
     sig: str,
@@ -56,8 +58,8 @@ async def main(
     provider = Provider(connection, wallet)
 
     from driftpy.constants.numeric_constants import QUOTE_PRECISION
-    ch = ClearingHouse.from_config(config, provider)
-    chu = ClearingHouseUser(ch)
+    ch = DriftClient.from_config(config, provider)
+    chu = DriftUser(ch)
     print(ch.program_id)
 
     from spl.token.instructions import get_associated_token_address, transfer, TransferParams
@@ -84,11 +86,11 @@ async def main(
         if spot_market_index == 1:
             # send to WSOL and sync 
             # https://github.dev/solana-labs/solana-program-library/token/js/src/ix/types.ts
-            keys = [AccountMeta(pubkey=ch.spot_market_atas[spot_market_index], is_signer=False, is_writable=True)]
+            accounts = [AccountMeta(pubkey=ch.spot_market_atas[spot_market_index], is_signer=False, is_writable=True)]
             data = int.to_bytes(17, 1, 'little')
             program_id = TOKEN_PROGRAM_ID
-            ix = TransactionInstruction(
-                keys=keys, 
+            ix = Instruction(
+                accounts=accounts, 
                 program_id=program_id, 
                 data=data
             )
