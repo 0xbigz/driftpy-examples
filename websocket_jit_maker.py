@@ -145,7 +145,7 @@ async def handle_binance_depth_feed(keypath, url, symbol, levels, update_speed):
     env = 'mainnet'
     with open(os.path.expanduser(keypath), 'r') as f: secret = json.load(f) 
     kp: Pubkey = Keypair.from_bytes(bytes(secret))
-    print('using public key:', kp.pubkey, 'subaccount=', subaccount_id)
+    print('using address:', kp.pubkey(), 'subaccount =', subaccount_id)
     config = configs[env]
     wallet = Wallet(kp)
     connection = AsyncClient(url)
