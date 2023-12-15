@@ -37,7 +37,7 @@ async def check_position(drift_acct: DriftClient):
     return bb
 
 
-def calculate_mark_premium(perp_market: PerpMarket):
+def calculate_mark_premium(perp_market: PerpMarketAccount):
     prem1 = perp_market.amm.last_mark_price_twap5min/1e6 - perp_market.amm.historical_oracle_data.last_oracle_price_twap5min/1e6
     prem2 = perp_market.amm.last_mark_price_twap/1e6 - perp_market.amm.historical_oracle_data.last_oracle_price_twap/1e6
     return min(prem1, prem2)
