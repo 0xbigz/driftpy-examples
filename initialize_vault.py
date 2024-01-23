@@ -1,13 +1,18 @@
-from solana.publickey import PublicKey
-from anchorpy import Program, Idl
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solders.sysvar import RENT as SYSVAR_RENT_PUBKEY
+
+from solders.system_program import ID as SYS_PROGRAM_ID
+from solana.transaction import Transaction
+
+from anchorpy import Program, Idl, Context
 import requests
 from anchorpy import Provider, Wallet
-from solana.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 import json
 import os
 from driftpy.constants.config import configs
-from driftpy.clearing_house import ClearingHouse
+from driftpy.drift_client import DriftClient, AccountSubscriptionConfig
 from driftpy.accounts import *
 from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import get_associated_token_address
@@ -20,25 +25,26 @@ async def main(keypath,
                ):
     with open(os.path.expanduser(keypath), 'r') as f:
         secret = json.load(f)
-    kp = Keypair.from_secret_key(bytes(secret))
-    print('using public key:', kp.public_key)
+    kp = Keypair.from_bytes(bytes(secret))
+    print('using public key:', str(kp.pubkey()))
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
 
     url = 'https://raw.githubusercontent.com/drift-labs/drift-vaults/master/ts/sdk/src/idl/drift_vaults.json'
     response = requests.get(url)
-    data = response.json()
-    idl = data
+    data = response.text
+    idl_raw = data
+    # idl = json.loads(idl_raw)
     pid = 'vAuLTsyrvSfZRuRB3XgvkPwNGgYSs9YRYymVebLKoxR'
     vault_program = Program(
-        Idl.from_json(idl),
-        PublicKey(pid),
+        Idl.from_json(idl_raw),
+        Pubkey.from_string(pid),
         provider,
     )
     config = configs[env]
-    drift_client = ClearingHouse.from_config(config, provider)
-
+    # drift_client = DriftClient.from_config(config, provider)
+    drift_client: DriftClient = DriftClient(provider.connection, provider.wallet, env.split('-')[0], account_subscription=AccountSubscriptionConfig("cached"))
     # Initialize an empty list to store the character number array
     char_number_array = [0] * 32
 
@@ -48,8 +54,8 @@ async def main(keypath,
             char_number_array[i] = ord(name[i])
 
     # Print the original string and the character number array
-    vault_pubkey = PublicKey.find_program_address(
-        [b"vault", bytes(char_number_array)], PublicKey(pid)
+    vault_pubkey = Pubkey.find_program_address(
+        [b"vault", bytes(char_number_array)], Pubkey.from_string(pid)
     )[0]
     params = {
         'name': char_number_array,
@@ -71,7 +77,7 @@ async def main(keypath,
     vault_user_stats = get_user_stats_account_public_key(drift_client.program_id, vault_pubkey)
 
     # vault_ata = get_associated_token_address(drift_client.authority, spot_market.mint)
-    ata = PublicKey.find_program_address(
+    ata = Pubkey.find_program_address(
         [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
     )[0]
 
@@ -88,8 +94,8 @@ async def main(keypath,
                 'token_account': ata,
                 'token_program': TOKEN_PROGRAM_ID,
                 'drift_program': drift_client.program_id,
-                'manager': drift_client.signer.public_key,
-                'payer': drift_client.signer.public_key,
+                'manager': drift_client.authority,
+                'payer': drift_client.authority,
                 "rent": SYSVAR_RENT_PUBKEY,
                 "system_program": SYS_PROGRAM_ID,
             }),
