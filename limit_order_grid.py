@@ -4,17 +4,16 @@ import copy
 
 from anchorpy import Wallet
 from anchorpy import Provider
-from solana.keypair import Keypair
+from solders.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 
 from driftpy.constants.config import configs
 from driftpy.types import *
 #MarketType, OrderType, OrderParams, PositionDirection, OrderTriggerCondition
 from driftpy.accounts import get_perp_market_account, get_spot_market_account
-from driftpy.math.oracle import get_oracle_data
 from driftpy.math.spot_market import get_signed_token_amount, get_token_amount
-from driftpy.clearing_house import ClearingHouse
-from driftpy.clearing_house_user import ClearingHouseUser
+from driftpy.drift_client import DriftClient
+from driftpy.drift_user import DriftUser
 from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
 from borsh_construct.enum import _rust_enum
 
@@ -93,11 +92,11 @@ async def main(
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
     if authority:
-        authority_pubkey = PublicKey(authority)
+        authority_pubkey = Pubkey(authority)
     else:
         authority_pubkey = None
-    drift_acct = ClearingHouse.from_config(config, provider, authority=authority_pubkey)
-    chu = ClearingHouseUser(drift_acct)
+    drift_acct = DriftClient.from_config(config, provider, authority=authority_pubkey)
+    chu = DriftUser(drift_acct)
     is_perp  = 'PERP' in market_name.upper()
     market_type = MarketType.PERP() if is_perp else MarketType.SPOT()
 
@@ -117,7 +116,7 @@ async def main(
         market = await get_perp_market_account(
                 drift_acct.program, market_index
             )
-        oracle_data = await get_oracle_data(connection, market.amm.oracle)
+        oracle_data = await drift_acct.get_oracle_price_data(market.amm.oracle)
         current_price = oracle_data.price/PRICE_PRECISION
         current_pos_raw = (await chu.get_user_position(market_index))
         if current_pos_raw is not None:
@@ -127,7 +126,7 @@ async def main(
 
     else:
         market = await get_spot_market_account( drift_acct.program, market_index)
-        oracle_data = await get_oracle_data(connection, market.oracle)
+        oracle_data = await drift_acct.get_oracle_price_data(market.oracle)
         current_price = oracle_data.price/PRICE_PRECISION
 
         spot_pos = await chu.get_user_spot_position(market_index)
