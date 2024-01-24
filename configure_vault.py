@@ -9,7 +9,6 @@ from anchorpy import Provider, Wallet
 from solana.rpc.async_api import AsyncClient
 import json
 import os
-from driftpy.constants.config import configs
 from driftpy.drift_client import DriftClient, AccountSubscriptionConfig
 from driftpy.accounts import *
 from spl.token.constants import TOKEN_PROGRAM_ID
