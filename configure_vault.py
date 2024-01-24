@@ -1,13 +1,16 @@
-from solana.publickey import PublicKey
-from anchorpy import Program, Idl
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solders.sysvar import RENT as SYSVAR_RENT_PUBKEY
+
+from solders.system_program import ID as SYS_PROGRAM_ID
+from anchorpy import Program, Idl, Context
 import requests
 from anchorpy import Provider, Wallet
-from solana.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 import json
 import os
 from driftpy.constants.config import configs
-from driftpy.clearing_house import ClearingHouse
+from driftpy.drift_client import DriftClient, AccountSubscriptionConfig
 from driftpy.accounts import *
 from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import get_associated_token_address
@@ -30,8 +33,8 @@ async def main(keypath,
                ):
     with open(os.path.expanduser(keypath), 'r') as f:
         secret = json.load(f)
-    kp = Keypair.from_secret_key(bytes(secret))
-    print('using public key:', kp.public_key)
+    kp = Keypair.from_bytes(bytes(secret))
+    print('using public key:', kp.pubkey())
     wallet = Wallet(kp)
     connection = AsyncClient(url)
     provider = Provider(connection, wallet)
@@ -41,26 +44,26 @@ async def main(keypath,
     data = response.json()
     idl = data
     pid = 'vAuLTsyrvSfZRuRB3XgvkPwNGgYSs9YRYymVebLKoxR'
+    data = response.text
+    idl_raw = data
+    # idl = json.loads(idl_raw)
+    pid = 'vAuLTsyrvSfZRuRB3XgvkPwNGgYSs9YRYymVebLKoxR'
     vault_program = Program(
-        Idl.from_json(idl),
-        PublicKey(pid),
+        Idl.from_json(idl_raw),
+        Pubkey.from_string(pid),
         provider,
     )
-    config = configs[env]
-    drift_client = ClearingHouse.from_config(config, provider)
-
-    print(f"vault name: {name}")
-
+    drift_client: DriftClient = DriftClient(provider.connection, provider.wallet, env.split('-')[0], account_subscription=AccountSubscriptionConfig("cached"))
     # Initialize an empty list to store the character number array
-    char_number_array = [0] * 32
+    char_number_array = [32] * 32 # 32 is unicode for space
 
     # Iterate through each character in the string and get its Unicode code point
     for i in range(32):
         if i < len(name):
             char_number_array[i] = ord(name[i])
 
-    vault_pubkey = PublicKey.find_program_address(
-        [b"vault", bytes(char_number_array)], PublicKey(pid)
+    vault_pubkey = Pubkey.find_program_address(
+        [b"vault", bytes(char_number_array)], Pubkey.from_string(pid)
     )[0]
 
     print(f"vault pubkey : {vault_pubkey}")
@@ -93,7 +96,7 @@ async def main(keypath,
             'permissioned': permissioned,
         }
 
-        ata = PublicKey.find_program_address(
+        ata = Pubkey.find_program_address(
             [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
         )[0]
 
@@ -110,16 +113,14 @@ async def main(keypath,
                     'token_account': ata,
                     'token_program': TOKEN_PROGRAM_ID,
                     'drift_program': drift_client.program_id,
-                    'manager': drift_client.signer.public_key,
-                    'payer': drift_client.signer.public_key,
+                    'manager': drift_client.authority,
+                    'payer': drift_client.authority,
                     "rent": SYSVAR_RENT_PUBKEY,
                     "system_program": SYS_PROGRAM_ID,
                 }),
         )
 
-        tx = Transaction()
-        tx.add(instruction)
-        txSig = await vault_program.provider.send(tx)
+        txSig = await drift_client.send_ixs([instruction])
         print(f"tx sig {txSig}")
     if action == 'update-vault':
         params = {
@@ -136,35 +137,32 @@ async def main(keypath,
             ctx=Context(
                 accounts={
                     'vault': vault_pubkey,
-                    'manager': drift_client.signer.public_key,
+                    'manager': drift_client.authority,
                 }),
         )
 
-        tx = Transaction()
-        tx.add(instruction)
-        txSig = await vault_program.provider.send(tx)
+        txSig = await drift_client.send_ixs([instruction])
+
         print(f"tx sig {txSig}")
     elif action == 'update-delegate':
         instruction = vault_program.instruction['update_delegate'](
-            PublicKey(delegate),
+            Pubkey.from_string(delegate),
             ctx=Context(
                 accounts={
                     'drift_user': vault_user,
                     'vault': vault_pubkey,
                     'drift_program': drift_client.program_id,
-                    'manager': drift_client.signer.public_key,
+                    'manager': drift_client.authority,
                 }),
         )
 
-        tx = Transaction()
-        tx.add(instruction)
-        txSig = await vault_program.provider.send(tx)
+        txSig = await drift_client.send_ixs([instruction])
         print(f"tx sig {txSig}")
     elif action == 'init-depositor':
-        depositor_pubkey = PublicKey(depositor)
-        vault_depositor_pubkey = PublicKey.find_program_address(
+        depositor_pubkey = Pubkey.from_string(depositor)
+        vault_depositor_pubkey = Pubkey.find_program_address(
             [b"vault_depositor", bytes(vault_pubkey), bytes(
-                depositor_pubkey)], PublicKey(pid)
+                depositor_pubkey)], Pubkey.from_string(pid)
         )[0]
 
         print(f"vault depositor pubkey : {vault_depositor_pubkey}")
@@ -175,28 +173,26 @@ async def main(keypath,
                     'vault': vault_pubkey,
                     'vault_depositor': vault_depositor_pubkey,
                     'authority': depositor_pubkey,
-                    'payer': drift_client.signer.public_key,
+                    'payer': drift_client.authority,
                     "rent": SYSVAR_RENT_PUBKEY,
                     "system_program": SYS_PROGRAM_ID,
                 }),
         )
 
-        tx = Transaction()
-        tx.add(instruction)
-        txSig = await vault_program.provider.send(tx)
+        txSig = await drift_client.send_ixs([instruction])
         print(f"tx sig {txSig}")
     elif action == 'deposit':
-        depositor_pubkey = drift_client.signer.public_key
-        vault_depositor_pubkey = PublicKey.find_program_address(
+        depositor_pubkey = drift_client.authority
+        vault_depositor_pubkey = Pubkey.find_program_address(
             [b"vault_depositor", bytes(vault_pubkey), bytes(
-                depositor_pubkey)], PublicKey(pid)
+                depositor_pubkey)], Pubkey.from_string(pid)
         )[0]
 
-        vault_ata = PublicKey.find_program_address(
+        vault_ata = Pubkey.find_program_address(
             [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
         )[0]
 
-        depositor_ata = get_associated_token_address(drift_client.signer.public_key, spot_market.mint)
+        depositor_ata = get_associated_token_address(drift_client.authority, spot_market.mint)
 
         print(f"vault depositor pubkey : {vault_depositor_pubkey}")
 
@@ -208,7 +204,7 @@ async def main(keypath,
                 accounts={
                     'vault': vault_pubkey,
                     'vault_depositor': vault_depositor_pubkey,
-                    'authority': drift_client.signer.public_key,
+                    'authority': drift_client.authority,
                     'drift_spot_market': spot_market.pubkey,
                     'drift_spot_market_vault': spot_market.vault,
                     'drift_user_stats': vault_user_stats,
@@ -223,9 +219,7 @@ async def main(keypath,
             ),
         )
 
-        tx = Transaction()
-        tx.add(instruction)
-        txSig = await vault_program.provider.send(tx)
+        txSig = await drift_client.send_ixs([instruction])
         print(f"tx sig {txSig}")
 
     vault_account = await vault_program.account.get('Vault').fetch(vault_pubkey, "processed")
