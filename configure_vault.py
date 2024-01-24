@@ -247,7 +247,7 @@ if __name__ == '__main__':
                         help='name of the vault. uniquely identifies the vault')
     parser.add_argument('--cluster', type=str,         choices=[
         'devnet',
-        'mainnet-beta'],
+        'mainnet'],
         default='devnet', help='the cluster to connect to')
     parser.add_argument(
         '--action',
