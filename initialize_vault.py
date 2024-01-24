@@ -13,7 +13,7 @@ import json
 import os
 from driftpy.constants.config import configs
 from driftpy.drift_client import DriftClient, AccountSubscriptionConfig
-from driftpy.accounts import *
+from driftpy.accounts import get_user_stats_account_public_key, get_spot_market_account, get_user_account_public_key
 from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.instructions import get_associated_token_address
 
@@ -81,9 +81,7 @@ async def main(keypath,
         [b"vault_token_account", bytes(vault_pubkey)], vault_program.program_id
     )[0]
 
-    instruction = vault_program.instruction['initialize_vault'](
-        params,
-        ctx=Context(
+    instr_context = Context(
             accounts={
                 'drift_spot_market': spot_market.pubkey,
                 'drift_spot_market_mint': spot_market.mint,
@@ -98,12 +96,17 @@ async def main(keypath,
                 'payer': drift_client.authority,
                 "rent": SYSVAR_RENT_PUBKEY,
                 "system_program": SYS_PROGRAM_ID,
-            }),
+            })
+    # print(instr_context)
+    instruction = vault_program.instruction['initialize_vault'](
+        params,
+        ctx=instr_context,
     )
 
     tx = Transaction()
     tx.add(instruction)
-    txSig = await vault_program.provider.send(tx)
+    txSig = await drift_client.send_ixs([instruction])
+    
     print(f"tx sig {txSig}")
 
 
