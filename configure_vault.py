@@ -29,6 +29,7 @@ async def main(keypath,
                min_deposit_amount,
                permissioned,
                deposit_amount,
+               margin_trading_enabled,
                ):
     with open(os.path.expanduser(keypath), 'r') as f:
         secret = json.load(f)
@@ -220,6 +221,20 @@ async def main(keypath,
 
         txSig = await drift_client.send_ixs([instruction])
         print(f"tx sig {txSig}")
+    elif action == 'update-margin-trading-enabled':
+        instruction = vault_program.instruction['update_margin_trading_enabled'](
+            margin_trading_enabled,
+            ctx=Context(
+                accounts={
+                    'vault': vault_pubkey,
+                    'drift_user': vault_user,
+                    'drift_program': drift_client.program_id,
+                    'manager': drift_client.authority,
+                }),
+        )
+
+        txSig = await drift_client.send_ixs([instruction])
+        print(f"tx sig {txSig}")
 
     vault_account = await vault_program.account.get('Vault').fetch(vault_pubkey, "processed")
     print("vault account", vault_account)
@@ -256,6 +271,7 @@ if __name__ == '__main__':
             'init-depositor',
             'update-delegate',
             'update-vault',
+            'update-margin-trading-enabled',
             'deposit',
         ],
         required=True,
@@ -279,6 +295,7 @@ if __name__ == '__main__':
                         help='the depositor to initialize for permisisoned vault (only used for init-depositor action)')
     parser.add_argument('--deposit-amount', type=int, default=None,
                         help='the amount of tokens to deposit into the vault (only used for deposit action)')
+    parser.add_argument('--enabled', type=lambda x: (str(x).lower() == 'true'), help='Enable or disable margin trading for the vault drift account (update-margin-trading-enabled action)')
     args = parser.parse_args()
 
     if args.keypath is None:
@@ -344,6 +361,11 @@ if __name__ == '__main__':
             raise ValueError('deposit requires that you pass a deposit amount')
         deposit_amount = get_token_amount_param(deposit_amount, 'deposit amount')
 
+    margin_trading_enabled = args.enabled
+    if args.action == 'update-margin-trading-enabled':
+        if margin_trading_enabled is None:
+            raise ValueError('update-margin-trading-enabled requires that you pass --enabled=true or --enabled=false')
+
     if args.cluster == 'devnet':
         url = 'https://api.devnet.solana.com'
     elif args.cluster == 'mainnet':
@@ -367,5 +389,6 @@ if __name__ == '__main__':
         max_tokens,
         min_deposit_amount,
         permissioned,
-        deposit_amount
+        deposit_amount,
+        margin_trading_enabled,
     ))
